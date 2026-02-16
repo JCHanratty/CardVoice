@@ -125,6 +125,43 @@ function openDb(dbPath) {
     );
   `);
 
+  // Pricing pipeline tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tracked_cards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      search_query TEXT NOT NULL DEFAULT '',
+      tracked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_synced DATETIME,
+      UNIQUE(card_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS price_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id INTEGER REFERENCES cards(id) ON DELETE SET NULL,
+      set_id INTEGER REFERENCES card_sets(id) ON DELETE SET NULL,
+      price REAL NOT NULL,
+      sold_date TEXT,
+      listing_title TEXT,
+      listing_url TEXT,
+      condition TEXT,
+      fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS price_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      set_id INTEGER REFERENCES card_sets(id) ON DELETE CASCADE,
+      card_id INTEGER REFERENCES cards(id) ON DELETE CASCADE,
+      median_price REAL NOT NULL,
+      snapshot_date TEXT NOT NULL,
+      UNIQUE(set_id, card_id, snapshot_date)
+    )
+  `);
+
   // Migration: add stats columns to voice_sessions (ignore if already present)
   const statsCols = [
     'ALTER TABLE voice_sessions ADD COLUMN duration_seconds INTEGER DEFAULT 0',
@@ -149,6 +186,12 @@ function openDb(dbPath) {
   for (const sql of hardenedCols) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
   }
+
+  // Pricing indexes
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_card ON price_history(card_id)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_set ON price_history(set_id)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_snapshots_date ON price_snapshots(snapshot_date)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tracked_cards_card ON tracked_cards(card_id)`); } catch(e) {}
 
   return db;
 }
