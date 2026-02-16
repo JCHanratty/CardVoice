@@ -1,0 +1,17 @@
+{
+  "name": "cardvoice-server",
+  "version": "0.2.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js --port 8001",
+    "test": "node --test tests/test-parser.js tests/test-routes.js tests/test-checklist-parser.js tests/test-hardened-parser.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.0"
+  }
+}

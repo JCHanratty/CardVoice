@@ -1,0 +1,511 @@
+/**
+ * Route integration tests — exercises every endpoint against an in-memory DB.
+ * Run: node --test tests/test-routes.js
+ */
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const express = require('express');
+const { openDb } = require('../db');
+const { createRoutes } = require('../routes');
+
+// Helper: make requests against the Express app without starting a real server
+function makeApp() {
+  const db = openDb(':memory:');
+  const app = express();
+  app.use(express.json());
+  app.use(createRoutes(db));
+  return { app, db };
+}
+
+// Tiny supertest replacement using Node built-in fetch via app.listen on random port
+let server, baseUrl, db;
+
+before(async () => {
+  const result = makeApp();
+  db = result.db;
+  await new Promise((resolve) => {
+    server = result.app.listen(0, () => {
+      const addr = server.address();
+      baseUrl = `http://localhost:${addr.port}`;
+      resolve();
+    });
+  });
+});
+
+after(() => {
+  server.close();
+  db.close();
+});
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${baseUrl}${path}`, opts);
+  const contentType = res.headers.get('content-type') || '';
+  let data;
+  if (contentType.includes('json')) {
+    data = await res.json();
+  } else {
+    data = await res.text();
+  }
+  return { status: res.status, data, headers: res.headers };
+}
+
+
+// ============================================================
+// Health
+// ============================================================
+describe('Health', () => {
+  it('GET /api/health returns ok', async () => {
+    const { status, data } = await api('GET', '/api/health');
+    assert.equal(status, 200);
+    assert.equal(data.status, 'ok');
+    assert.equal(data.version, '0.2.0');
+  });
+});
+
+
+// ============================================================
+// Sets CRUD
+// ============================================================
+describe('Sets CRUD', () => {
+  it('list sets — empty', async () => {
+    const { status, data } = await api('GET', '/api/sets');
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(data));
+  });
+
+  it('create set', async () => {
+    const { status, data } = await api('POST', '/api/sets', {
+      name: '2022 Bowman', year: 2022, brand: 'Bowman', sport: 'Baseball',
+    });
+    assert.equal(status, 200);
+    assert.ok(data.id);
+    assert.equal(data.name, '2022 Bowman');
+  });
+
+  it('duplicate set returns 400', async () => {
+    const { status, data } = await api('POST', '/api/sets', { name: '2022 Bowman' });
+    assert.equal(status, 400);
+    assert.equal(data.detail, 'Set already exists');
+  });
+
+  it('get set by id', async () => {
+    const { data: sets } = await api('GET', '/api/sets');
+    const setId = sets[0].id;
+    const { status, data } = await api('GET', `/api/sets/${setId}`);
+    assert.equal(status, 200);
+    assert.equal(data.name, '2022 Bowman');
+    assert.ok(Array.isArray(data.cards));
+  });
+
+  it('get nonexistent set returns 404', async () => {
+    const { status } = await api('GET', '/api/sets/9999');
+    assert.equal(status, 404);
+  });
+
+  it('delete set', async () => {
+    // Create a throwaway set
+    const { data: created } = await api('POST', '/api/sets', { name: 'Delete Me' });
+    const { status, data } = await api('DELETE', `/api/sets/${created.id}`);
+    assert.equal(status, 200);
+    assert.equal(data.deleted, true);
+    // Verify gone
+    const { status: s2 } = await api('GET', `/api/sets/${created.id}`);
+    assert.equal(s2, 404);
+  });
+});
+
+
+// ============================================================
+// Cards CRUD
+// ============================================================
+describe('Cards CRUD', () => {
+  let setId;
+
+  before(async () => {
+    const { data } = await api('POST', '/api/sets', { name: 'Test Cards Set', year: 2023 });
+    setId = data.id;
+  });
+
+  it('bulk add cards', async () => {
+    const { status, data } = await api('POST', `/api/sets/${setId}/cards`, {
+      cards: [
+        { card_number: '1', player: 'Mike Trout', team: 'Angels', qty: 2 },
+        { card_number: '2', player: 'Shohei Ohtani', team: 'Angels', qty: 1 },
+        { card_number: '3', player: 'Aaron Judge', team: 'Yankees', qty: 0 },
+      ],
+    });
+    assert.equal(status, 200);
+    assert.equal(data.added, 3);
+    assert.equal(data.total, 3);
+  });
+
+  it('bulk add — upsert ADDS to qty', async () => {
+    const { data } = await api('POST', `/api/sets/${setId}/cards`, {
+      cards: [
+        { card_number: '1', player: 'Mike Trout', qty: 3 },
+      ],
+    });
+    assert.equal(data.added, 0); // not a new card
+
+    // Check qty was added (2 + 3 = 5)
+    const { data: setData } = await api('GET', `/api/sets/${setId}`);
+    const card1 = setData.cards.find(c => c.card_number === '1');
+    assert.equal(card1.qty, 5);
+  });
+
+  it('bulk add to nonexistent set returns 404', async () => {
+    const { status } = await api('POST', '/api/sets/9999/cards', { cards: [] });
+    assert.equal(status, 404);
+  });
+
+  it('update card — SET qty', async () => {
+    const { data: setData } = await api('GET', `/api/sets/${setId}`);
+    const card = setData.cards[0];
+
+    const { status, data } = await api('PUT', `/api/cards/${card.id}`, { qty: 10 });
+    assert.equal(status, 200);
+    assert.equal(data.qty, 10);
+  });
+
+  it('update card — partial fields', async () => {
+    const { data: setData } = await api('GET', `/api/sets/${setId}`);
+    const card = setData.cards.find(c => c.card_number === '2');
+
+    const { data } = await api('PUT', `/api/cards/${card.id}`, { team: 'Dodgers' });
+    assert.equal(data.team, 'Dodgers');
+    assert.equal(data.player, 'Shohei Ohtani'); // unchanged
+  });
+
+  it('update nonexistent card returns 404', async () => {
+    const { status } = await api('PUT', '/api/cards/9999', { qty: 1 });
+    assert.equal(status, 404);
+  });
+
+  it('delete card', async () => {
+    const { data: setData } = await api('GET', `/api/sets/${setId}`);
+    const card = setData.cards.find(c => c.card_number === '3');
+
+    const { status, data } = await api('DELETE', `/api/cards/${card.id}`);
+    assert.equal(status, 200);
+    assert.equal(data.deleted, true);
+
+    // Verify total_cards recalculated
+    const { data: updated } = await api('GET', `/api/sets/${setId}`);
+    assert.equal(updated.total_cards, 2);
+  });
+
+  it('delete nonexistent card returns 404', async () => {
+    const { status } = await api('DELETE', '/api/cards/9999');
+    assert.equal(status, 404);
+  });
+
+  it('delete set cascades cards', async () => {
+    const { data: created } = await api('POST', '/api/sets', { name: 'Cascade Test' });
+    await api('POST', `/api/sets/${created.id}/cards`, {
+      cards: [{ card_number: '1', player: 'Test', qty: 1 }],
+    });
+    await api('DELETE', `/api/sets/${created.id}`);
+
+    // Cards should be gone (verified by trying to get the set)
+    const { status } = await api('GET', `/api/sets/${created.id}`);
+    assert.equal(status, 404);
+  });
+});
+
+
+// ============================================================
+// Voice Qty Endpoint
+// ============================================================
+describe('Voice Qty', () => {
+  let setId;
+
+  before(async () => {
+    const { data } = await api('POST', '/api/sets', { name: 'Voice Test Set' });
+    setId = data.id;
+    await api('POST', `/api/sets/${setId}/cards`, {
+      cards: [
+        { card_number: '42', player: 'Player A', qty: 0 },
+        { card_number: '55', player: 'Player B', qty: 0 },
+        { card_number: '103', player: 'Player C', qty: 0 },
+      ],
+    });
+  });
+
+  it('spoken numbers — sets qty', async () => {
+    const { status, data } = await api('PUT', `/api/sets/${setId}/voice-qty`, {
+      text: '42 55 103',
+    });
+    assert.equal(status, 200);
+    assert.deepStrictEqual(data.parsed_numbers, [42, 55, 103]);
+    assert.equal(data.updated, 3);
+
+    // Verify qty was set
+    const { data: setData } = await api('GET', `/api/sets/${setId}`);
+    assert.equal(setData.cards.find(c => c.card_number === '42').qty, 1);
+    assert.equal(setData.cards.find(c => c.card_number === '55').qty, 1);
+    assert.equal(setData.cards.find(c => c.card_number === '103').qty, 1);
+  });
+
+  it('spoken numbers with multiplier', async () => {
+    const { data } = await api('PUT', `/api/sets/${setId}/voice-qty`, {
+      text: '42 times 3',
+    });
+    assert.equal(data.updated, 1);
+    const { data: setData } = await api('GET', `/api/sets/${setId}`);
+    assert.equal(setData.cards.find(c => c.card_number === '42').qty, 3);
+  });
+
+  it('card keyword triggers parseCardQuantities', async () => {
+    const { data } = await api('PUT', `/api/sets/${setId}/voice-qty`, {
+      text: 'card 42 quantity 5',
+    });
+    assert.ok(data.parsed_pairs);
+    assert.equal(data.updated, 1);
+    const { data: setData } = await api('GET', `/api/sets/${setId}`);
+    assert.equal(setData.cards.find(c => c.card_number === '42').qty, 5);
+  });
+
+  it('not found cards reported', async () => {
+    const { data } = await api('PUT', `/api/sets/${setId}/voice-qty`, {
+      text: '999',
+    });
+    assert.ok(data.not_found.includes(999));
+  });
+
+  it('nonexistent set returns 404', async () => {
+    const { status } = await api('PUT', '/api/sets/9999/voice-qty', { text: '42' });
+    assert.equal(status, 404);
+  });
+});
+
+
+// ============================================================
+// Export Endpoints
+// ============================================================
+describe('Exports', () => {
+  let setId;
+
+  before(async () => {
+    const { data } = await api('POST', '/api/sets', { name: 'Export Test' });
+    setId = data.id;
+    await api('POST', `/api/sets/${setId}/cards`, {
+      cards: [
+        { card_number: '1', player: 'Test Player', team: 'Team A', qty: 2 },
+        { card_number: '2', player: 'Player Two', team: 'Team B', qty: 0 },
+      ],
+    });
+  });
+
+  it('CSV export — only qty > 0', async () => {
+    const { status, data, headers } = await api('GET', `/api/sets/${setId}/export/csv`);
+    assert.equal(status, 200);
+    assert.ok(headers.get('content-type').includes('text/csv'));
+    assert.ok(data.includes('Test Player'));
+    assert.ok(!data.includes('Player Two')); // qty=0, excluded
+  });
+
+  it('Excel export returns xlsx', async () => {
+    const res = await fetch(`${baseUrl}/api/sets/${setId}/export/excel`);
+    assert.equal(res.status, 200);
+    assert.ok(res.headers.get('content-type').includes('spreadsheet'));
+  });
+
+  it('export nonexistent set returns 404', async () => {
+    const { status } = await api('GET', '/api/sets/9999/export/csv');
+    assert.equal(status, 404);
+  });
+});
+
+
+// ============================================================
+// Checklist Parse Endpoint
+// ============================================================
+describe('Checklist Parse', () => {
+  it('parses pipe-format checklist text', async () => {
+    const text = `Base Set Checklist
+350 cards.
+1 | Mike Trout | Los Angeles Angels
+2 | Aaron Judge | New York Yankees
+3 | Mookie Betts | Los Angeles Dodgers`;
+
+    const { status, data } = await api('POST', '/api/parse-checklist', { text });
+    assert.equal(status, 200);
+    assert.ok(data.sections.length >= 1);
+    assert.equal(data.sections[0].name, 'Base Set');
+    assert.equal(data.sections[0].declaredCount, 350);
+    assert.equal(data.sections[0].cards.length, 3);
+    assert.equal(data.sections[0].cards[0].player, 'Mike Trout');
+    assert.equal(data.sections[0].sectionType, 'base');
+    assert.ok(data.summary);
+    assert.equal(data.summary.totalCards, 3);
+  });
+
+  it('returns 400 for missing text', async () => {
+    const { status } = await api('POST', '/api/parse-checklist', {});
+    assert.equal(status, 400);
+  });
+
+  it('parses multi-section checklist with parallels', async () => {
+    const text = `Base Set Checklist
+5 cards.
+Parallels: Gold /50; Silver /100
+1 | Player A | Team A
+2 | Player B | Team B
+
+Insert Checklist
+3 cards.
+Odds: 1:4
+3 | Player C | Team C`;
+
+    const { status, data } = await api('POST', '/api/parse-checklist', { text });
+    assert.equal(status, 200);
+    assert.equal(data.sections.length, 2);
+    assert.ok(data.sections[0].parallels.length >= 2);
+    assert.equal(data.sections[0].parallels[0].name, 'Gold');
+    assert.equal(data.sections[0].parallels[0].serialMax, 50);
+    assert.equal(data.sections[1].name, 'Insert');
+    assert.equal(data.sections[1].odds, 'Odds: 1:4');
+  });
+});
+
+
+// ============================================================
+// Checklist Import + Metadata Endpoints
+// ============================================================
+describe('Checklist Import', () => {
+  let setId;
+
+  before(async () => {
+    const { data } = await api('POST', '/api/sets', { name: 'Import Test Set', year: 2024 });
+    setId = data.id;
+    // Pre-add a card with qty=5 to verify import doesn't overwrite qty
+    await api('POST', `/api/sets/${setId}/cards`, {
+      cards: [{ card_number: '1', player: 'Old Player', team: 'Old Team', insert_type: 'Base', qty: 5 }],
+    });
+  });
+
+  it('imports sections and creates cards with qty=0', async () => {
+    const { status, data } = await api('POST', `/api/sets/${setId}/import-checklist`, {
+      sections: [{
+        name: 'Base',
+        cardCount: 3,
+        odds: '',
+        parallels: [
+          { name: 'Gold', printRun: 50, exclusive: 'Hobby', notes: 'Hobby Exclusive' },
+          { name: 'Silver', printRun: 100, exclusive: '', notes: '' },
+        ],
+        cards: [
+          { cardNumber: '1', player: 'Mike Trout', team: 'Angels', rcSp: 'RC' },
+          { cardNumber: '2', player: 'Aaron Judge', team: 'Yankees', rcSp: '' },
+          { cardNumber: '3', player: 'Mookie Betts', team: 'Dodgers', rcSp: 'SP' },
+        ],
+      }],
+    });
+    assert.equal(status, 200);
+    assert.equal(data.imported, 2); // cards 2 and 3 are new
+    assert.equal(data.updated, 1); // card 1 already existed
+    assert.equal(data.insertTypes, 1);
+    assert.equal(data.parallels, 2);
+  });
+
+  it('preserves existing card qty after import', async () => {
+    const { data } = await api('GET', `/api/sets/${setId}`);
+    const card1 = data.cards.find(c => c.card_number === '1');
+    assert.equal(card1.qty, 5); // MUST NOT change from 5
+    assert.equal(card1.player, 'Mike Trout'); // metadata updated
+    assert.equal(card1.team, 'Angels');
+    assert.equal(card1.rc_sp, 'RC');
+  });
+
+  it('new cards have qty=0', async () => {
+    const { data } = await api('GET', `/api/sets/${setId}`);
+    const card2 = data.cards.find(c => c.card_number === '2');
+    const card3 = data.cards.find(c => c.card_number === '3');
+    assert.equal(card2.qty, 0);
+    assert.equal(card3.qty, 0);
+    assert.equal(card3.rc_sp, 'SP');
+  });
+
+  it('GET /api/sets/:id/metadata returns insert types and parallels', async () => {
+    const { status, data } = await api('GET', `/api/sets/${setId}/metadata`);
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(data.insertTypes));
+    assert.ok(Array.isArray(data.parallels));
+    assert.equal(data.insertTypes.length, 1);
+    assert.equal(data.insertTypes[0].name, 'Base');
+    assert.equal(data.insertTypes[0].card_count, 3);
+    assert.equal(data.parallels.length, 2);
+    assert.equal(data.parallels[0].name, 'Gold');
+    assert.equal(data.parallels[0].print_run, 50);
+    assert.equal(data.parallels[0].exclusive, 'Hobby');
+    assert.equal(data.parallels[1].name, 'Silver');
+    assert.equal(data.parallels[1].print_run, 100);
+  });
+
+  it('import with multiple insert types', async () => {
+    const { data } = await api('POST', `/api/sets/${setId}/import-checklist`, {
+      sections: [{
+        name: 'Chrome',
+        cardCount: 2,
+        odds: 'Odds: 1:3',
+        parallels: [],
+        cards: [
+          { cardNumber: 'C1', player: 'Test A', team: 'Team A', rcSp: '' },
+          { cardNumber: 'C2', player: 'Test B', team: 'Team B', rcSp: '' },
+        ],
+      }],
+    });
+    assert.equal(data.imported, 2);
+
+    // Verify metadata now has 2 insert types
+    const { data: meta } = await api('GET', `/api/sets/${setId}/metadata`);
+    assert.equal(meta.insertTypes.length, 2);
+    const chrome = meta.insertTypes.find(t => t.name === 'Chrome');
+    assert.ok(chrome);
+    assert.equal(chrome.card_count, 2);
+    assert.equal(chrome.odds, 'Odds: 1:3');
+  });
+
+  it('metadata for nonexistent set returns 404', async () => {
+    const { status } = await api('GET', '/api/sets/9999/metadata');
+    assert.equal(status, 404);
+  });
+
+  it('import to nonexistent set returns 404', async () => {
+    const { status } = await api('POST', '/api/sets/9999/import-checklist', {
+      sections: [{ name: 'X', cards: [] }],
+    });
+    assert.equal(status, 404);
+  });
+
+  it('import with empty sections returns 400', async () => {
+    const { status } = await api('POST', `/api/sets/${setId}/import-checklist`, {
+      sections: [],
+    });
+    assert.equal(status, 400);
+  });
+
+  it('re-importing same data does not duplicate cards', async () => {
+    const { data: before } = await api('GET', `/api/sets/${setId}`);
+    const countBefore = before.cards.length;
+
+    await api('POST', `/api/sets/${setId}/import-checklist`, {
+      sections: [{
+        name: 'Base',
+        parallels: [],
+        cards: [
+          { cardNumber: '1', player: 'Mike Trout', team: 'Angels', rcSp: 'RC' },
+          { cardNumber: '2', player: 'Aaron Judge', team: 'Yankees', rcSp: '' },
+        ],
+      }],
+    });
+
+    const { data: after } = await api('GET', `/api/sets/${setId}`);
+    assert.equal(after.cards.length, countBefore); // no new cards
+  });
+});

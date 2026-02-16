@@ -1,0 +1,53 @@
+{
+  "name": "cardvoice",
+  "version": "0.1.0",
+  "description": "Voice-powered sports card collection manager",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "build": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.cardvoice.app",
+    "productName": "CardVoice",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+      },
+      {
+        "from": "../frontend/build",
+        "to": "frontend/build"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  },
+  "dependencies": {
+    "electron": "^28.1.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.9.1"
+  }
+}

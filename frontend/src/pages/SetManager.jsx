@@ -1,0 +1,296 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
+import { Plus, Trash2, Upload, Mic, ExternalLink, Database, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import axios from 'axios';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+export default function SetManager() {
+  const [sets, setSets] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [collapsedYears, setCollapsedYears] = useState(null);
+
+  useEffect(() => {
+    loadSets();
+  }, []);
+
+  const loadSets = () => {
+    axios.get(`${API}/api/sets`).then(r => setSets(r.data)).catch(console.error);
+  };
+
+  const deleteSet = async (id, name) => {
+    if (!window.confirm(`Delete "${name}" and all its cards?`)) return;
+    try {
+      await axios.delete(`${API}/api/sets/${id}`);
+      loadSets();
+    } catch (err) {
+      alert('Delete failed');
+    }
+  };
+
+  const handleFileImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setImporting(true);
+
+    try {
+      const text = await file.text();
+      const lines = text.split('\n').filter(l => l.trim());
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+
+      const setName = file.name.replace(/\.(csv|txt)$/i, '');
+      const res = await axios.post(`${API}/api/sets`, {
+        name: setName, year: null, brand: '', sport: 'Baseball'
+      });
+      const setId = res.data.id;
+
+      const cards = lines.slice(1).map(line => {
+        const cols = line.split(',').map(c => c.trim());
+        return {
+          card_number: cols[headers.indexOf('card #')] || cols[0] || '',
+          player: cols[headers.indexOf('player')] || cols[1] || '',
+          team: cols[headers.indexOf('team')] || cols[2] || '',
+          rc_sp: cols[headers.indexOf('rc/sp')] || cols[3] || '',
+          insert_type: cols[headers.indexOf('insert type')] || cols[4] || 'Base',
+          parallel: cols[headers.indexOf('parallel')] || cols[5] || '',
+          qty: parseInt(cols[headers.indexOf('qty')] || cols[6]) || 0,
+        };
+      }).filter(c => c.card_number && c.player);
+
+      if (cards.length > 0) {
+        await axios.post(`${API}/api/sets/${setId}/cards`, { cards });
+      }
+
+      loadSets();
+      alert(`Imported ${cards.length} cards into "${setName}"`);
+    } catch (err) {
+      alert('Import failed: ' + (err.message || 'Unknown error'));
+    }
+    setImporting(false);
+    e.target.value = '';
+  };
+
+  const migrateFromCardVision = async () => {
+    if (!window.confirm('Import sets, checklists & owned cards from CardVision (CNNSCAN)?\n\nThis will:\n1. Remove old empty migration data\n2. Import all sets & checklists from CardVision\n3. Import your owned card quantities\n\nA backup is created automatically.')) return;
+    setMigrating(true);
+    try {
+      const res = await axios.post(`${API}/api/migrate-from-cardvision`);
+      const d = res.data;
+      const parts = [];
+      if (d.cleaned.sets > 0) {
+        parts.push(`Cleaned up: ${d.cleaned.sets} old sets (${d.cleaned.cards} cards)`);
+      }
+      if (d.imported.sets > 0) {
+        parts.push(`Imported: ${d.imported.sets} sets, ${d.imported.cards} checklist cards`);
+      }
+      if (d.imported.sections > 0) {
+        parts.push(`Sections: ${d.imported.sections} insert types, ${d.imported.parallels} parallels`);
+      }
+      if (d.imported.owned > 0) {
+        parts.push(`Owned cards: ${d.imported.owned} cards with quantities`);
+      }
+      if (d.skipped.length > 0) {
+        parts.push(`Skipped (already exist): ${d.skipped.slice(0, 5).join(', ')}${d.skipped.length > 5 ? ` +${d.skipped.length - 5} more` : ''}`);
+      }
+      if (parts.length === 0) {
+        alert('No new data to import — all sets already exist in CardVoice.');
+      } else {
+        alert('Migration complete!\n\n' + parts.join('\n'));
+      }
+      loadSets();
+    } catch (err) {
+      alert('Migration failed: ' + (err.response?.data?.detail || err.message));
+    }
+    setMigrating(false);
+  };
+
+  // Group sets by year, sorted descending
+  const grouped = useMemo(() => {
+    const map = {};
+    sets.forEach(s => {
+      const yr = s.year || 'Other';
+      if (!map[yr]) map[yr] = [];
+      map[yr].push(s);
+    });
+    // Sort years descending, "Other" last
+    return Object.entries(map).sort((a, b) => {
+      if (a[0] === 'Other') return 1;
+      if (b[0] === 'Other') return -1;
+      return Number(b[0]) - Number(a[0]);
+    });
+  }, [sets]);
+
+  // Default all years to collapsed on first load
+  useEffect(() => {
+    if (grouped.length > 0 && collapsedYears === null) {
+      const all = {};
+      grouped.forEach(([yr]) => { all[yr] = true; });
+      setCollapsedYears(all);
+    }
+  }, [grouped, collapsedYears]);
+
+  const toggleYear = (yr) => {
+    setCollapsedYears(prev => ({ ...prev, [yr]: !prev[yr] }));
+  };
+
+  // Totals
+  const totalCards = sets.reduce((a, s) => a + (s.total_cards || 0), 0);
+  const totalOwned = sets.reduce((a, s) => a + (s.owned_count || 0), 0);
+
+  return (
+    <div className="w-full">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-cv-text">My Sets</h2>
+          <p className="text-sm text-cv-muted mt-1">
+            {sets.length} set{sets.length !== 1 ? 's' : ''} · {totalCards.toLocaleString()} cards · {totalOwned.toLocaleString()} owned
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={migrateFromCardVision} disabled={migrating}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50 transition-all">
+            {migrating ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+            {migrating ? 'Migrating...' : 'Import from CardVision'}
+          </button>
+          <label className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-white/5 border border-cv-border text-cv-text hover:bg-white/10 cursor-pointer transition-all">
+            <Upload size={14} />
+            Import CSV
+            <input type="file" accept=".csv,.txt" onChange={handleFileImport} className="hidden" />
+          </label>
+          <Link to="/sets/add"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent/80 text-cv-dark hover:shadow-lg hover:shadow-cv-accent/20 transition-all">
+            <Plus size={14} /> New Set
+          </Link>
+        </div>
+      </div>
+
+      {/* Sets by Year */}
+      {sets.length === 0 ? (
+        <div className="bg-cv-panel rounded-xl border border-cv-border p-12 text-center">
+          <Database size={48} className="text-cv-muted/50 mx-auto mb-4" />
+          <p className="text-cv-muted text-lg">No sets yet</p>
+          <p className="text-cv-muted/70 text-sm mt-1">Create a new set or import from CSV to get started</p>
+          <Link to="/sets/add" className="inline-flex items-center gap-2 mt-4 px-5 py-2.5 rounded-lg text-sm font-medium bg-cv-accent text-cv-dark hover:bg-cv-accent/90 transition-all">
+            <Plus size={16} /> Create Your First Set
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {grouped.map(([year, yearSets]) => {
+            const collapsed = !collapsedYears || !!collapsedYears[year];
+            const yearCards = yearSets.reduce((a, s) => a + (s.total_cards || 0), 0);
+            const yearOwned = yearSets.reduce((a, s) => a + (s.owned_count || 0), 0);
+            const pct = yearCards > 0 ? Math.round((yearOwned / yearCards) * 100) : 0;
+            return (
+              <div key={year}>
+                {/* Year Header */}
+                <button onClick={() => toggleYear(year)}
+                  className="flex items-center gap-3 mb-3 group w-full text-left">
+                  <div className="flex items-center gap-2">
+                    {collapsed
+                      ? <ChevronRight size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors" />
+                      : <ChevronDown size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors" />
+                    }
+                    <span className="text-xl font-bold text-cv-text group-hover:text-cv-accent transition-colors">{year}</span>
+                  </div>
+                  <span className="text-xs text-cv-muted">
+                    {yearSets.length} set{yearSets.length !== 1 ? 's' : ''} · {yearCards.toLocaleString()} cards
+                  </span>
+                  <div className="flex-1 mx-4">
+                    <div className="progress-bar">
+                      <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                  <span className="text-xs font-mono text-cv-accent">{pct}%</span>
+                </button>
+
+                {/* Year Sets Grid */}
+                {!collapsed && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {yearSets.map(s => {
+                      const ownPct = s.total_cards > 0 ? Math.round(((s.owned_count || 0) / s.total_cards) * 100) : 0;
+                      return (
+                        <div key={s.id}
+                          className="group bg-cv-panel rounded-xl border border-cv-border/70 p-4 hover:border-cv-accent/40 glow-teal transition-all duration-200 flex flex-col relative overflow-hidden">
+                          {/* Subtle top accent line */}
+                          <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cv-accent/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+
+                          <div className="flex-1">
+                            <div className="flex items-start justify-between">
+                              <Link to={`/sets/${s.id}`} className="text-cv-text font-semibold hover:text-cv-accent transition-colors leading-tight">
+                                {s.name}
+                              </Link>
+                              {s.brand && (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-cv-accent2/10 text-cv-accent2 border border-cv-accent2/20 ml-2 shrink-0">
+                                  {s.brand}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Stats Row */}
+                            <div className="mt-3 flex items-center gap-4 text-xs">
+                              <div>
+                                <span className="text-cv-text font-mono font-bold text-base">{s.total_cards}</span>
+                                <span className="text-cv-muted ml-1">cards</span>
+                              </div>
+                              {s.section_count > 0 && (
+                                <div>
+                                  <span className="text-cv-accent2 font-mono font-bold text-base">{s.section_count}</span>
+                                  <span className="text-cv-muted ml-1">sections</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Owned Progress */}
+                            {s.total_cards > 0 && (
+                              <div className="mt-3">
+                                <div className="flex items-center justify-between text-xs mb-1">
+                                  <span className="text-cv-muted">
+                                    <span className="text-cv-accent font-semibold">{s.owned_count || 0}</span>/{s.total_cards} owned
+                                  </span>
+                                  <span className="font-mono text-cv-accent font-bold">{ownPct}%</span>
+                                </div>
+                                <div className="progress-bar">
+                                  <div className="progress-bar-fill" style={{ width: `${ownPct}%` }} />
+                                </div>
+                                {(s.total_qty > 0) && (
+                                  <div className="text-xs text-cv-muted mt-1">
+                                    <span className="text-cv-yellow font-semibold font-mono">{s.total_qty}</span> total qty
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center justify-between mt-3 pt-3 border-t border-cv-border/50">
+                            <div className="flex items-center gap-2">
+                              <Link to={`/voice/${s.id}`}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-cv-accent/10 text-cv-accent hover:bg-cv-accent/20 transition-all font-medium">
+                                <Mic size={12} /> Voice
+                              </Link>
+                              <Link to={`/sets/${s.id}`}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-white/5 border border-cv-border/50 text-cv-text hover:bg-white/10 transition-all">
+                                <ExternalLink size={12} /> View
+                              </Link>
+                            </div>
+                            <button onClick={() => deleteSet(s.id, s.name)}
+                              className="p-1.5 rounded-lg text-cv-muted/50 hover:text-cv-red hover:bg-cv-red/10 transition-all opacity-0 group-hover:opacity-100">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

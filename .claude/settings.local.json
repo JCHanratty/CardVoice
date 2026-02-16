@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python:*)",
+      "Bash(npx vite build)",
+      "Bash(npm ls:*)",
+      "WebFetch(domain:linear.app)",
+      "WebFetch(domain:linear.style)",
+      "Bash(node --test:*)",
+      "Bash(node -e:*)",
+      "Bash(npm test:*)",
+      "Bash(dir:*)",
+      "Bash(node tests/test-migration-dry-run.js:*)",
+      "Bash(curl:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(npm list:*)",
+      "Bash(npm install:*)",
+      "Bash(python3:*)",
+      "Bash(taskkill:*)",
+      "Bash(node index.js:*)",
+      "Bash(tasklist:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(cmd /c \"taskkill /F /PID 35968\")",
+      "Bash(cmd /c \"taskkill /F /PID 12044\")",
+      "Bash(npm run build:*)",
+      "Bash(timeout:*)",
+      "Bash(powershell.exe -Command \"Remove-Item ''c:\\\\Users\\\\jorda\\\\Desktop\\\\VoiceLogger\\\\server\\\\fix-stadium-club.js''\")",
+      "Bash(powershell.exe -Command \"Set-Location ''c:\\\\Users\\\\jorda\\\\Desktop\\\\VoiceLogger\\\\server''; npm test 2>&1 | Select-String -Pattern ''tests|pass|fail'' | Select-Object -Last 6\")",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git config:*)"
+    ]
+  }
+}
