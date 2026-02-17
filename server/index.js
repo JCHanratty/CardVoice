@@ -6,6 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const { openDb } = require('./db');
 const { createRoutes } = require('./routes');
+const { SyncService } = require('./pricing/sync');
 
 /**
  * Create and configure the Express app + HTTP server.
@@ -23,6 +24,11 @@ function createServer(opts = {}) {
 
   app.use(createRoutes(db));
 
+  // Start background price sync service
+  const syncService = new SyncService(db);
+  app.locals.syncService = syncService;
+  setTimeout(() => syncService.start(), 5000);
+
   const server = app.listen(port, () => {
     console.log(`CardVoice server listening on http://localhost:${port}`);
   });
@@ -30,6 +36,7 @@ function createServer(opts = {}) {
   // Graceful shutdown
   const shutdown = () => {
     console.log('Shutting down...');
+    syncService.stop();
     server.close();
     db.close();
   };
