@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createBrowserRouter, RouterProvider, Link, useLocation, useParams, Outlet } from 'react-router-dom';
-import { Mic, Database, HelpCircle, LayoutDashboard, ChevronRight } from 'lucide-react';
+import { Mic, Database, HelpCircle, LayoutDashboard, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
 import axios from 'axios';
 import Dashboard from './pages/Dashboard';
 import VoiceEntry from './pages/VoiceEntry';
@@ -8,6 +8,8 @@ import SetManager from './pages/SetManager';
 import SetDetail from './pages/SetDetail';
 import HowTo from './pages/HowTo';
 import AddSet from './pages/AddSet';
+import Settings from './pages/Settings';
+import PriceHistory from './pages/PriceHistory';
 import Logo from './components/Logo';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -111,6 +113,7 @@ function Layout() {
             <NavLink to="/voice" icon={Mic} label="Voice Entry" />
             <NavLink to="/sets" icon={Database} label="My Sets" />
             <NavLink to="/how-to" icon={HelpCircle} label="How To" />
+            <NavLink to="/settings" icon={SettingsIcon} label="Settings" />
           </nav>
         </div>
       </header>
@@ -138,6 +141,8 @@ const router = createBrowserRouter([
       { path: '/sets/add', element: <AddSet /> },
       { path: '/sets/:setId', element: <SetDetail /> },
       { path: '/how-to', element: <HowTo /> },
+      { path: '/settings', element: <Settings /> },
+      { path: '/cards/:cardId/prices', element: <PriceHistory /> },
     ],
   },
 ]);
