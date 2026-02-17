@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mic, Plus, Clock, Zap, Target, Database } from 'lucide-react';
 import axios from 'axios';
+import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
 import Logo from '../components/Logo';
 
 /* ── Custom SVG Icons ── */
@@ -129,11 +130,15 @@ export default function Dashboard() {
 
   const [voiceStats, setVoiceStats] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
+  const [portfolio, setPortfolio] = useState(null);
+  const [priceChanges, setPriceChanges] = useState([]);
 
   useEffect(() => {
     axios.get(`${API}/api/sets`).then(r => setSets(r.data)).catch(() => {});
     axios.get(`${API}/api/voice-sessions/stats`).then(r => setVoiceStats(r.data)).catch(() => {});
     axios.get(`${API}/api/voice-sessions/recent`).then(r => setRecentSessions(r.data)).catch(() => {});
+    axios.get(`${API}/api/portfolio`).then(r => setPortfolio(r.data)).catch(() => {});
+    axios.get(`${API}/api/portfolio/changes`).then(r => setPriceChanges(r.data)).catch(() => {});
   }, []);
 
   const totalCards = sets.reduce((acc, s) => acc + (s.total_cards || 0), 0);
@@ -319,6 +324,88 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* ═══ PORTFOLIO VALUE ═══ */}
+      {portfolio && (portfolio.totalValue > 0 || portfolio.timeline.length > 0) && (
+        <div className="mt-10">
+          <h2 className="text-2xl font-bold text-cv-text mb-4">Portfolio Value</h2>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50">
+              <div className="text-sm text-cv-muted mb-1">Total Estimated Value</div>
+              <div className="text-3xl font-bold text-green-400 font-mono">
+                ${portfolio.totalValue.toFixed(2)}
+              </div>
+              <div className="mt-3 text-xs text-cv-muted">
+                Sets: ${portfolio.totalSetValue.toFixed(2)} &middot; Cards: ${portfolio.totalCardValue.toFixed(2)}
+              </div>
+            </div>
+
+            {portfolio.timeline.length > 1 && (
+              <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 col-span-2">
+                <div className="text-sm text-cv-muted mb-2">Value Over Time</div>
+                <div className="h-32">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={portfolio.timeline}>
+                      <XAxis dataKey="snapshot_date" tick={{ fontSize: 10, fill: '#6b7280' }} />
+                      <Tooltip
+                        contentStyle={{ background: '#1a1f2e', border: '1px solid #374151', borderRadius: 8 }}
+                        labelStyle={{ color: '#9ca3af' }}
+                        formatter={(val) => [`$${val.toFixed(2)}`, 'Value']}
+                      />
+                      <Area type="monotone" dataKey="total_value" stroke="#00d4aa" fill="#00d4aa" fillOpacity={0.15} strokeWidth={2} dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            {portfolio.topSets.length > 0 && (
+              <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50">
+                <h3 className="text-sm font-semibold text-cv-text mb-3">Top Sets by Value</h3>
+                {portfolio.topSets.map((s, i) => (
+                  <div key={s.id} className="flex justify-between items-center py-1.5 text-sm border-b border-cv-border/30 last:border-0">
+                    <span className="text-cv-text">{i + 1}. {s.year} {s.name}</span>
+                    <span className="text-green-400 font-mono">${s.median_price.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {portfolio.topCards.length > 0 && (
+              <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50">
+                <h3 className="text-sm font-semibold text-cv-text mb-3">Top Tracked Cards</h3>
+                {portfolio.topCards.map((c, i) => (
+                  <div key={c.id} className="flex justify-between items-center py-1.5 text-sm border-b border-cv-border/30 last:border-0">
+                    <span className="text-cv-text">{i + 1}. #{c.card_number} {c.player} <span className="text-cv-muted">({c.set_year} {c.set_name})</span></span>
+                    <span className="text-green-400 font-mono">${c.median_price.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {priceChanges.length > 0 && (
+            <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mt-4">
+              <h3 className="text-sm font-semibold text-cv-text mb-3">Recent Price Changes</h3>
+              {priceChanges.map(c => {
+                const diff = c.current_price - c.previous_price;
+                const pct = ((diff / c.previous_price) * 100).toFixed(1);
+                const up = diff > 0;
+                return (
+                  <div key={c.id} className="flex justify-between items-center py-1.5 text-sm border-b border-cv-border/30 last:border-0">
+                    <span className="text-cv-text">#{c.card_number} {c.player} <span className="text-cv-muted">({c.set_year} {c.set_name})</span></span>
+                    <span className={`font-mono ${up ? 'text-green-400' : 'text-red-400'}`}>
+                      {up ? '\u2191' : '\u2193'} {up ? '+' : ''}{pct}% (${c.current_price.toFixed(2)})
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ═══ QUICK START ═══ */}
       <div className="mb-8">
