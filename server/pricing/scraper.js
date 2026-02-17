@@ -1,81 +1,141 @@
-const { load } = require('cheerio');
-const { request } = require('undici');
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const config = require('./scraper-config.json');
 
-function randomUserAgent() {
-  const agents = config.userAgents;
-  return agents[Math.floor(Math.random() * agents.length)];
+const EBAY_APP_ID = process.env.EBAY_APP_ID;
+const EBAY_CERT_ID = process.env.EBAY_CERT_ID;
+
+const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
+const BROWSE_API_URL = 'https://api.ebay.com/buy/browse/v1/item_summary/search';
+
+// Cached token + expiry
+let cachedToken = null;
+let tokenExpiry = 0;
+
+/**
+ * Get a fresh OAuth application token using client credentials grant.
+ * Tokens are cached and auto-refreshed when expired.
+ */
+async function getToken() {
+  if (cachedToken && Date.now() < tokenExpiry) {
+    return cachedToken;
+  }
+
+  if (!EBAY_APP_ID || !EBAY_CERT_ID) {
+    throw new Error('EBAY_APP_ID and EBAY_CERT_ID must be set in server/.env');
+  }
+
+  const credentials = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString('base64');
+
+  const resp = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Basic ${credentials}`,
+    },
+    body: 'grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope',
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Token request failed (${resp.status}): ${text.substring(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  cachedToken = data.access_token;
+  // Refresh 5 minutes before actual expiry
+  tokenExpiry = Date.now() + (data.expires_in - 300) * 1000;
+
+  return cachedToken;
 }
 
-function buildSearchUrl(query) {
-  const params = new URLSearchParams({ ...config.defaultParams, _nkw: query });
-  return `${config.baseUrl}?${params.toString()}`;
-}
-
-function parsePriceText(text) {
-  if (!text) return null;
-  const cleaned = text.replace(/[^0-9.]/g, '');
-  const val = parseFloat(cleaned);
-  return isNaN(val) ? null : val;
-}
-
-function parseDateText(text) {
-  if (!text) return null;
-  const match = text.match(/(\w{3}\s+\d{1,2},?\s+\d{4})/);
-  if (!match) return null;
-  const d = new Date(match[1]);
-  return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
-}
-
+/**
+ * Search eBay for items using the Browse API.
+ * Auto-refreshes OAuth tokens as needed.
+ */
 async function scrapeEbaySold(query) {
-  const url = buildSearchUrl(query);
-  const { selectors } = config;
-
-  let body;
+  let token;
   try {
-    const resp = await request(url, {
-      headers: {
-        'User-Agent': randomUserAgent(),
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      maxRedirections: 3,
-    });
-
-    if (resp.statusCode === 429) {
-      return { error: 'rate_limited', results: [] };
-    }
-    if (resp.statusCode !== 200) {
-      return { error: `http_${resp.statusCode}`, results: [] };
-    }
-
-    body = await resp.body.text();
+    token = await getToken();
   } catch (err) {
     return { error: err.message, results: [] };
   }
 
-  const $ = load(body);
+  const params = new URLSearchParams({
+    q: query,
+    limit: '50',
+    sort: 'newlyListed',
+  });
+
+  const url = `${BROWSE_API_URL}?${params.toString()}`;
+
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (resp.status === 429) {
+      return { error: 'rate_limited', results: [] };
+    }
+    if (resp.status === 401) {
+      // Token expired mid-request -- invalidate and retry once
+      cachedToken = null;
+      tokenExpiry = 0;
+      try {
+        token = await getToken();
+      } catch (err) {
+        return { error: err.message, results: [] };
+      }
+      const retry = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+          'Accept': 'application/json',
+        },
+      });
+      if (!retry.ok) {
+        return { error: `Retry failed: http_${retry.status}`, results: [] };
+      }
+      const retryData = await retry.json();
+      return parseResults(retryData);
+    }
+    if (!resp.ok) {
+      const text = await resp.text();
+      return { error: `http_${resp.status}: ${text.substring(0, 300)}`, results: [] };
+    }
+
+    const data = await resp.json();
+    return parseResults(data);
+  } catch (err) {
+    return { error: err.message, results: [] };
+  }
+}
+
+function parseResults(data) {
+  const items = data.itemSummaries || [];
   const results = [];
 
-  $(selectors.resultItem).each((i, el) => {
-    const $el = $(el);
-    const title = $el.find(selectors.title).text().trim();
-    const priceText = $el.find(selectors.price).first().text().trim();
-    const dateText = $el.find(selectors.date).text().trim();
-    const link = $el.find(selectors.link).attr('href') || '';
-    const condition = $el.find(selectors.condition).text().trim();
+  for (const item of items) {
+    const title = item.title || '';
+    const priceVal = parseFloat(item.price?.value || '0');
+    const currency = item.price?.currency || 'USD';
+    const itemUrl = item.itemWebUrl || '';
+    const condName = item.condition || '';
+    const endDate = item.itemEndDate || item.itemCreationDate || '';
 
-    const price = parsePriceText(priceText);
-    if (price === null || price === 0) return;
+    if (priceVal === 0 || currency !== 'USD') continue;
 
     results.push({
       title,
-      price,
-      soldDate: parseDateText(dateText),
-      listingUrl: link.split('?')[0],
-      condition,
+      price: priceVal,
+      soldDate: endDate ? endDate.split('T')[0] : null,
+      listingUrl: itemUrl,
+      condition: condName,
     });
-  });
+  }
 
   return { error: null, results };
 }
@@ -133,7 +193,5 @@ module.exports = {
   filterOutliers,
   buildCardQuery,
   buildSetQuery,
-  buildSearchUrl,
-  parsePriceText,
-  parseDateText,
+  getToken,
 };
