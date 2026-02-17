@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Trash2, Pencil, Check, X, Download, Search, Upload, Mic, ChevronUp, ChevronDown } from 'lucide-react';
 import axios from 'axios';
 import ChecklistWizardModal from '../components/ChecklistWizardModal';
+import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -28,6 +29,13 @@ export default function SetDetail() {
   const [activeInsertType, setActiveInsertType] = useState('');
   const [activeParallel, setActiveParallel] = useState('');
 
+  const [trackedCards, setTrackedCards] = useState({});
+  const [setPrice, setSetPrice] = useState(null);
+  const [setSnapshots, setSetSnapshots] = useState([]);
+  const [expandedCardId, setExpandedCardId] = useState(null);
+  const [cardPriceHistory, setCardPriceHistory] = useState([]);
+  const [cardSnapshots, setCardSnapshots] = useState([]);
+
   const loadSet = async () => {
     try {
       const res = await axios.get(`${API}/api/sets/${setId}`);
@@ -50,7 +58,23 @@ export default function SetDetail() {
     } catch (_) {}
   };
 
-  useEffect(() => { loadSet(); loadMetadata(); }, [setId]);
+  useEffect(() => {
+    loadSet();
+    loadMetadata();
+
+    axios.get(`${API}/api/tracked-cards`).then(r => {
+      const map = {};
+      r.data.filter(tc => tc.set_id === parseInt(setId)).forEach(tc => {
+        map[tc.card_id] = tc;
+      });
+      setTrackedCards(map);
+    }).catch(() => {});
+
+    axios.get(`${API}/api/sets/${setId}/price-snapshots`).then(r => {
+      setSetSnapshots(r.data);
+      if (r.data.length > 0) setSetPrice(r.data[r.data.length - 1]);
+    }).catch(() => {});
+  }, [setId]);
 
   const deleteCard = async (cardId) => {
     if (!window.confirm('Delete this card?')) return;
@@ -88,6 +112,27 @@ export default function SetDetail() {
   const cancelEdit = () => {
     setEditingId(null);
     setEditForm({});
+  };
+
+  const toggleTrack = async (cardId) => {
+    if (trackedCards[cardId]) {
+      await axios.delete(`${API}/api/cards/${cardId}/track`);
+      setTrackedCards(prev => { const next = { ...prev }; delete next[cardId]; return next; });
+    } else {
+      const resp = await axios.post(`${API}/api/cards/${cardId}/track`);
+      setTrackedCards(prev => ({ ...prev, [cardId]: resp.data }));
+    }
+  };
+
+  const expandTrackedCard = async (cardId) => {
+    if (expandedCardId === cardId) { setExpandedCardId(null); return; }
+    setExpandedCardId(cardId);
+    const [histResp, snapResp] = await Promise.all([
+      axios.get(`${API}/api/cards/${cardId}/price-history`),
+      axios.get(`${API}/api/cards/${cardId}/price-snapshots`),
+    ]);
+    setCardPriceHistory(histResp.data);
+    setCardSnapshots(snapResp.data);
   };
 
   const updateQty = async (cardId, newQty) => {
@@ -267,6 +312,97 @@ export default function SetDetail() {
         )}
       </div>
 
+      {/* Set Value Panel */}
+      {(setPrice || Object.keys(trackedCards).length > 0) && (
+        <div className="bg-cv-panel rounded-xl border border-cv-border/50 p-5 mb-4">
+          <h3 className="text-lg font-semibold text-cv-text mb-3">Estimated Value</h3>
+          <div className="flex items-end gap-8">
+            <div>
+              <div className="text-3xl font-bold text-green-400 font-mono">
+                {setPrice ? `$${setPrice.median_price.toFixed(2)}` : 'No data yet'}
+              </div>
+              <div className="text-xs text-cv-muted mt-1">
+                {setPrice ? `Set value as of ${setPrice.snapshot_date}` : 'Sync to get pricing'}
+              </div>
+            </div>
+            {setSnapshots.length > 1 && (
+              <div className="w-48 h-12">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={setSnapshots}>
+                    <Area type="monotone" dataKey="median_price" stroke="#00d4aa" fill="#00d4aa" fillOpacity={0.15} strokeWidth={2} dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+
+          {Object.keys(trackedCards).length > 0 && (
+            <div className="mt-4 border-t border-cv-border/50 pt-3">
+              <h4 className="text-sm font-medium text-cv-muted mb-2">Tracked Cards</h4>
+              {Object.values(trackedCards).map(tc => (
+                <div key={tc.card_id}>
+                  <div
+                    onClick={() => expandTrackedCard(tc.card_id)}
+                    className="flex justify-between items-center py-1 text-sm cursor-pointer hover:bg-white/[0.03] rounded px-2"
+                  >
+                    <span className="text-cv-text">#{tc.card_number} {tc.player} {expandedCardId === tc.card_id ? '\u25BE' : '\u25B8'}</span>
+                    <span className="text-green-400 font-mono">
+                      {tc.median_price != null ? `$${tc.median_price.toFixed(2)}` : 'No data'}
+                    </span>
+                  </div>
+
+                  {expandedCardId === tc.card_id && (
+                    <div className="bg-cv-dark/50 rounded-lg p-4 mt-1 mb-2 ml-4 border border-cv-border/30">
+                      {cardSnapshots.length > 1 && (
+                        <div className="h-24 mb-3">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={cardSnapshots}>
+                              <Area type="monotone" dataKey="median_price" stroke="#6366f1" fill="#6366f1" fillOpacity={0.15} strokeWidth={2} dot={false} />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-cv-muted border-b border-cv-border/30">
+                            <th className="text-left py-1">Date</th>
+                            <th className="text-right py-1">Price</th>
+                            <th className="text-left py-1 pl-3">Condition</th>
+                            <th className="text-left py-1 pl-3">Listing</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cardPriceHistory.slice(0, 20).map(ph => (
+                            <tr key={ph.id} className="border-b border-cv-border/20">
+                              <td className="py-1 text-cv-muted">{ph.sold_date || 'N/A'}</td>
+                              <td className="py-1 text-right text-green-400 font-mono">${ph.price.toFixed(2)}</td>
+                              <td className="py-1 pl-3 text-cv-muted">{ph.condition || '\u2014'}</td>
+                              <td className="py-1 pl-3">
+                                {ph.listing_url ? (
+                                  <a href={ph.listing_url} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline truncate block max-w-[200px]">
+                                    {ph.listing_title || 'View'}
+                                  </a>
+                                ) : '\u2014'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {cardPriceHistory.length === 0 && (
+                        <div className="text-cv-muted text-center py-2">No price data yet. Run a sync to fetch prices.</div>
+                      )}
+                      <Link to={`/cards/${tc.card_id}/prices`} className="text-xs text-cyan-400 hover:underline mt-2 inline-block">
+                        View Full Price History &rarr;
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Search + Filter */}
       <div className="flex gap-3 mb-4">
         <div className="flex-1 relative">
@@ -355,6 +491,7 @@ export default function SetDetail() {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-cv-dark/50 border-b border-cv-border/50">
+              <th className="text-center px-2 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-8">{'\u2605'}</th>
               <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Card #</th>
               <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Player</th>
               <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Team</th>
@@ -363,6 +500,7 @@ export default function SetDetail() {
               <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Parallel</th>
               <th className="text-center px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Qty</th>
               <th className="text-center px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-20">Actions</th>
+              <th className="text-right px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Price</th>
             </tr>
           </thead>
           <tbody>
@@ -378,7 +516,7 @@ export default function SetDetail() {
               const stats = groupStats[groupKey] || { cards: 0, qty: 0, have: 0 };
               const groupHeader = newParallel ? (
                 <tr key={`grp-${idx}`} className="bg-cv-accent/[0.03]">
-                  <td colSpan="8" className="px-3 py-1.5 text-xs font-semibold">
+                  <td colSpan="10" className="px-3 py-1.5 text-xs font-semibold">
                     <span className="text-cv-accent">{card.insert_type || 'Base'}</span>
                     {card.parallel && <><span className="text-cv-muted mx-1.5">/</span><span className="text-cv-yellow">{card.parallel}</span></>}
                     {!card.parallel && <span className="text-cv-muted ml-1.5">-- base</span>}
@@ -387,12 +525,13 @@ export default function SetDetail() {
               ) : null;
               const groupFooter = lastInGroup ? (
                 <tr key={`sub-${idx}`} className="bg-cv-dark/30 border-b-2 border-cv-border/50">
-                  <td colSpan="4" className="px-3 py-1.5 text-xs text-cv-muted text-right font-semibold">
+                  <td colSpan="5" className="px-3 py-1.5 text-xs text-cv-muted text-right font-semibold">
                     Subtotal: {stats.cards} cards · {stats.have} owned
                   </td>
                   <td className="px-3 py-1.5 text-xs text-cv-accent font-mono">{card.insert_type || 'Base'}</td>
                   <td className="px-3 py-1.5 text-xs text-cv-yellow font-mono">{card.parallel || '--'}</td>
                   <td className="px-3 py-1.5 text-xs text-cv-accent font-mono text-center font-bold">{stats.qty}</td>
+                  <td></td>
                   <td></td>
                 </tr>
               ) : null;
@@ -401,6 +540,7 @@ export default function SetDetail() {
               <tr className={`border-b border-cv-border/30 hover:bg-white/[0.02] transition-colors ${card.qty > 0 ? '' : ''}`}>
                 {editingId === card.id ? (
                   <>
+                    <td></td>
                     <td className="px-2 py-1">
                       <input type="text" value={editForm.card_number} onChange={e => setEditForm({...editForm, card_number: e.target.value})}
                         className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text font-mono focus:outline-none" />
@@ -435,9 +575,19 @@ export default function SetDetail() {
                         <button onClick={cancelEdit} className="p-1 rounded text-cv-muted hover:bg-white/10"><X size={14} /></button>
                       </div>
                     </td>
+                    <td></td>
                   </>
                 ) : (
                   <>
+                    <td className="px-2 py-2 text-center">
+                      <button
+                        onClick={() => toggleTrack(card.id)}
+                        className={`hover:scale-110 transition-transform ${trackedCards[card.id] ? 'text-yellow-400' : 'text-gray-600'}`}
+                        title={trackedCards[card.id] ? 'Stop tracking price' : 'Track price on eBay'}
+                      >
+                        {trackedCards[card.id] ? '\u2605' : '\u2606'}
+                      </button>
+                    </td>
                     <td className="px-3 py-2 text-cv-text font-mono">{card.card_number}</td>
                     <td className="px-3 py-2 text-cv-text">{card.player || '-'}</td>
                     <td className="px-3 py-2 text-cv-muted">{card.team || '-'}</td>
@@ -474,6 +624,13 @@ export default function SetDetail() {
                         <button onClick={() => deleteCard(card.id)} className="p-1 rounded text-cv-muted hover:text-cv-red hover:bg-cv-red/10 transition-all"><Trash2 size={13} /></button>
                       </div>
                     </td>
+                    <td className="px-3 py-2 text-right text-sm">
+                      {trackedCards[card.id]?.median_price != null ? (
+                        <span className="text-green-400 font-mono">${trackedCards[card.id].median_price.toFixed(2)}</span>
+                      ) : trackedCards[card.id] ? (
+                        <span className="text-cv-muted text-xs">No data</span>
+                      ) : null}
+                    </td>
                   </>
                 )}
               </tr>
@@ -482,7 +639,7 @@ export default function SetDetail() {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan="8" className="text-center py-8 text-cv-muted">
+                <td colSpan="10" className="text-center py-8 text-cv-muted">
                   {cards.length === 0 ? 'No cards in this set yet' : 'No cards match your search/filter'}
                 </td>
               </tr>
@@ -491,13 +648,14 @@ export default function SetDetail() {
           {filtered.length > 0 && (
             <tfoot>
               <tr className="bg-cv-dark/50 border-t-2 border-cv-accent/20">
-                <td colSpan="4" className="px-3 py-2.5 text-sm text-cv-text font-bold text-right">
+                <td colSpan="5" className="px-3 py-2.5 text-sm text-cv-text font-bold text-right">
                   Total: {filtered.length} cards · {filtered.filter(c => c.qty > 0).length} owned · {Object.keys(groupStats).length} group{Object.keys(groupStats).length !== 1 ? 's' : ''}
                 </td>
                 <td colSpan="2" className="px-3 py-2.5"></td>
                 <td className="px-3 py-2.5 text-center text-sm text-cv-accent font-mono font-bold">
                   {filtered.reduce((s, c) => s + (c.qty || 0), 0)}
                 </td>
+                <td></td>
                 <td></td>
               </tr>
             </tfoot>
