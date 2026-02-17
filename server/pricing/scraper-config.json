@@ -1,0 +1,29 @@
+{
+  "baseUrl": "https://www.ebay.com/sch/i.html",
+  "defaultParams": {
+    "_nkw": "",
+    "LH_Complete": "1",
+    "LH_Sold": "1",
+    "_sop": "13",
+    "_ipg": "60"
+  },
+  "selectors": {
+    "resultItem": ".s-item",
+    "title": ".s-item__title span",
+    "price": ".s-item__price",
+    "date": ".s-item__title--tag .POSITIVE",
+    "link": ".s-item__link",
+    "condition": ".SECONDARY_INFO"
+  },
+  "userAgents": [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+  ],
+  "rateLimitMs": 3000,
+  "maxRetries": 3,
+  "backoffMs": [3600000, 14400000, 86400000],
+  "outlierMultiplier": 3.0,
+  "staleDays": 30,
+  "lotKeywords": ["lot", "bundle", "collection", "set of", "bulk", "mixed"]
+}
