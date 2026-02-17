@@ -870,6 +870,181 @@ function createRoutes(db) {
     res.json({ status: 'ok', version: '0.2.0', db_path: dbPath, db_dir: dbDir });
   });
 
+  // ============================================================
+  // Pricing Routes
+  // ============================================================
+
+  // Track/untrack a card
+  router.post('/api/cards/:id/track', (req, res) => {
+    const card = db.prepare(`SELECT * FROM cards WHERE id = ?`).get(req.params.id);
+    if (!card) return res.status(404).json({ error: 'Card not found' });
+
+    const set = db.prepare(`SELECT * FROM card_sets WHERE id = ?`).get(card.set_id);
+    const { buildCardQuery } = require('./pricing/scraper');
+    const query = buildCardQuery(card, set);
+
+    db.prepare(`INSERT OR IGNORE INTO tracked_cards (card_id, search_query) VALUES (?, ?)`).run(card.id, query);
+    const tracked = db.prepare(`SELECT * FROM tracked_cards WHERE card_id = ?`).get(card.id);
+    res.json(tracked);
+  });
+
+  router.delete('/api/cards/:id/track', (req, res) => {
+    db.prepare(`DELETE FROM tracked_cards WHERE card_id = ?`).run(req.params.id);
+    res.json({ ok: true });
+  });
+
+  // Get all tracked cards (with latest price info)
+  router.get('/api/tracked-cards', (req, res) => {
+    const rows = db.prepare(`
+      SELECT tc.*, c.card_number, c.player, c.team, c.parallel, c.insert_type,
+             cs.name as set_name, cs.year as set_year, cs.id as set_id,
+             ps.median_price, ps.snapshot_date
+      FROM tracked_cards tc
+      JOIN cards c ON tc.card_id = c.id
+      JOIN card_sets cs ON c.set_id = cs.id
+      LEFT JOIN price_snapshots ps ON ps.card_id = c.id
+        AND ps.snapshot_date = (SELECT MAX(snapshot_date) FROM price_snapshots WHERE card_id = c.id)
+      ORDER BY ps.median_price DESC NULLS LAST
+    `).all();
+    res.json(rows);
+  });
+
+  // Check if a card is tracked
+  router.get('/api/cards/:id/tracked', (req, res) => {
+    const tracked = db.prepare(`SELECT * FROM tracked_cards WHERE card_id = ?`).get(req.params.id);
+    res.json({ tracked: !!tracked, data: tracked || null });
+  });
+
+  // Update tracked card search query
+  router.put('/api/tracked-cards/:id', (req, res) => {
+    const { search_query } = req.body;
+    db.prepare(`UPDATE tracked_cards SET search_query = ? WHERE id = ?`).run(search_query, req.params.id);
+    res.json({ ok: true });
+  });
+
+  // Get price history for a card
+  router.get('/api/cards/:id/price-history', (req, res) => {
+    const rows = db.prepare(`
+      SELECT * FROM price_history WHERE card_id = ? ORDER BY sold_date DESC, fetched_at DESC
+    `).all(req.params.id);
+    res.json(rows);
+  });
+
+  // Get price history for a set (set-level)
+  router.get('/api/sets/:id/price-history', (req, res) => {
+    const rows = db.prepare(`
+      SELECT * FROM price_history WHERE set_id = ? ORDER BY sold_date DESC, fetched_at DESC
+    `).all(req.params.id);
+    res.json(rows);
+  });
+
+  // Get price snapshots for a set over time
+  router.get('/api/sets/:id/price-snapshots', (req, res) => {
+    const rows = db.prepare(`
+      SELECT * FROM price_snapshots WHERE set_id = ? AND card_id IS NULL ORDER BY snapshot_date ASC
+    `).all(req.params.id);
+    res.json(rows);
+  });
+
+  // Get price snapshots for a card over time
+  router.get('/api/cards/:id/price-snapshots', (req, res) => {
+    const rows = db.prepare(`
+      SELECT * FROM price_snapshots WHERE card_id = ? ORDER BY snapshot_date ASC
+    `).all(req.params.id);
+    res.json(rows);
+  });
+
+  // Portfolio summary
+  router.get('/api/portfolio', (req, res) => {
+    const setValues = db.prepare(`
+      SELECT cs.id, cs.name, cs.year, ps.median_price, ps.snapshot_date
+      FROM card_sets cs
+      LEFT JOIN price_snapshots ps ON ps.set_id = cs.id AND ps.card_id IS NULL
+        AND ps.snapshot_date = (SELECT MAX(snapshot_date) FROM price_snapshots WHERE set_id = cs.id AND card_id IS NULL)
+      ORDER BY ps.median_price DESC NULLS LAST
+    `).all();
+
+    const cardValues = db.prepare(`
+      SELECT c.id, c.card_number, c.player, c.parallel, cs.name as set_name, cs.year as set_year,
+             ps.median_price, ps.snapshot_date
+      FROM tracked_cards tc
+      JOIN cards c ON tc.card_id = c.id
+      JOIN card_sets cs ON c.set_id = cs.id
+      LEFT JOIN price_snapshots ps ON ps.card_id = c.id
+        AND ps.snapshot_date = (SELECT MAX(snapshot_date) FROM price_snapshots WHERE card_id = c.id)
+      ORDER BY ps.median_price DESC NULLS LAST
+    `).all();
+
+    const timeline = db.prepare(`
+      SELECT snapshot_date, SUM(median_price) as total_value
+      FROM price_snapshots
+      WHERE set_id IS NOT NULL AND card_id IS NULL
+      GROUP BY snapshot_date
+      ORDER BY snapshot_date ASC
+    `).all();
+
+    const totalSetValue = setValues.reduce((sum, s) => sum + (s.median_price || 0), 0);
+    const totalCardValue = cardValues.reduce((sum, c) => sum + (c.median_price || 0), 0);
+
+    res.json({
+      totalValue: totalSetValue + totalCardValue,
+      totalSetValue,
+      totalCardValue,
+      topSets: setValues.filter(s => s.median_price).slice(0, 5),
+      topCards: cardValues.filter(c => c.median_price).slice(0, 5),
+      timeline,
+    });
+  });
+
+  // Recent price changes (cards with significant movement)
+  router.get('/api/portfolio/changes', (req, res) => {
+    const rows = db.prepare(`
+      SELECT c.id, c.card_number, c.player, cs.name as set_name, cs.year as set_year,
+             curr.median_price as current_price,
+             prev.median_price as previous_price
+      FROM price_snapshots curr
+      JOIN cards c ON curr.card_id = c.id
+      JOIN card_sets cs ON c.set_id = cs.id
+      LEFT JOIN price_snapshots prev ON prev.card_id = curr.card_id
+        AND prev.snapshot_date = (
+          SELECT MAX(snapshot_date) FROM price_snapshots
+          WHERE card_id = curr.card_id AND snapshot_date < curr.snapshot_date
+        )
+      WHERE curr.card_id IS NOT NULL
+        AND curr.snapshot_date = (SELECT MAX(snapshot_date) FROM price_snapshots WHERE card_id = curr.card_id)
+        AND prev.median_price IS NOT NULL
+        AND ABS(curr.median_price - prev.median_price) / prev.median_price > 0.1
+      ORDER BY ABS(curr.median_price - prev.median_price) DESC
+      LIMIT 10
+    `).all();
+    res.json(rows);
+  });
+
+  // Sync control endpoints
+  router.get('/api/sync/status', (req, res) => {
+    const syncService = req.app.locals.syncService;
+    res.json(syncService ? syncService.getStatus() : { running: false, enabled: false });
+  });
+
+  router.post('/api/sync/trigger', async (req, res) => {
+    const syncService = req.app.locals.syncService;
+    if (!syncService) return res.status(500).json({ error: 'Sync service not available' });
+    if (syncService.running) return res.json({ message: 'Sync already running' });
+    syncService.runFullSync(); // fire and forget
+    res.json({ message: 'Sync started' });
+  });
+
+  router.put('/api/sync/settings', (req, res) => {
+    const syncService = req.app.locals.syncService;
+    if (!syncService) return res.status(500).json({ error: 'Sync service not available' });
+    const { enabled, intervalHours } = req.body;
+    if (typeof enabled === 'boolean') syncService.setEnabled(enabled);
+    if (typeof intervalHours === 'number' && intervalHours > 0) {
+      syncService.setInterval(intervalHours * 60 * 60 * 1000);
+    }
+    res.json(syncService.getStatus());
+  });
+
   return router;
 }
 
