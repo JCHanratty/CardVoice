@@ -134,6 +134,7 @@ export default function Dashboard() {
   const [priceChanges, setPriceChanges] = useState([]);
   const [recentSets, setRecentSets] = useState([]);
   const [releases, setReleases] = useState([]);
+  const [appVersion, setAppVersion] = useState(null);
 
   useEffect(() => {
     axios.get(`${API}/api/sets`).then(r => setSets(r.data)).catch(() => {});
@@ -147,6 +148,10 @@ export default function Dashboard() {
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setReleases(data); })
       .catch(() => {});
+
+    if (window.electronAPI?.getAppVersion) {
+      window.electronAPI.getAppVersion().then(v => setAppVersion(v)).catch(() => {});
+    }
   }, []);
 
   const totalChecklist = sets.reduce((acc, s) => acc + (s.total_cards || 0), 0);
@@ -614,9 +619,9 @@ export default function Dashboard() {
           <h2 className="text-xl font-display font-bold text-cv-text mb-4 flex items-center gap-2">
             <Zap size={20} className="text-cv-gold" />
             What's New
-            {window.electronAPI?.isElectron && (
+            {appVersion && (
               <span className="text-xs font-mono text-cv-muted ml-auto">
-                Current: v{window.electronAPI?.getAppVersion?.() || '\u2014'}
+                Current: v{appVersion}
               </span>
             )}
           </h2>
