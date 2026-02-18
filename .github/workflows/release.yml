@@ -32,7 +32,7 @@ jobs:
 
       - name: Install Electron dependencies
         working-directory: electron
-        run: npm ci
+        run: npm install
 
       - name: Rebuild native modules for Electron
         working-directory: electron
