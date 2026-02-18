@@ -8,3 +8,15 @@ __pycache__/
 *.pyc
 .pytest_cache/
 CardVoice-v0.2-FULL/
+
+# Database files (user data, not tracked)
+*.db
+*.db-journal
+*.db-wal
+server/card_logger.db
+
+# Electron build output
+electron/dist/
+
+# Legacy Python backend
+backend/

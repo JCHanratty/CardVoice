@@ -62,7 +62,7 @@ export default function AddSet() {
           <ArrowLeft size={18} />
         </Link>
         <div>
-          <h2 className="text-2xl font-bold text-cv-text">Add Cards to Set</h2>
+          <h2 className="text-2xl font-display font-bold text-cv-text">Add Cards to Set</h2>
           <p className="text-sm text-cv-muted mt-0.5">Select or create a set, then import a checklist</p>
         </div>
       </div>
@@ -122,7 +122,7 @@ export default function AddSet() {
             <button type="button" onClick={() => setShowCreateForm(false)}
               className="px-4 py-2 text-sm text-cv-muted hover:text-cv-text">Cancel</button>
             <button type="submit" disabled={creating}
-              className="px-4 py-2 rounded-lg text-sm bg-cv-accent text-cv-dark font-medium hover:bg-cv-accent/90 disabled:opacity-50">
+              className="px-4 py-2 rounded-lg text-sm bg-gradient-to-r from-cv-accent to-cv-accent2 text-white font-medium hover:shadow-lg hover:shadow-cv-accent/20 disabled:opacity-50">
               {creating ? 'Creating...' : 'Create Set'}
             </button>
           </div>
@@ -133,14 +133,14 @@ export default function AddSet() {
       {selectedSetId ? (
         <div className="bg-cv-panel rounded-xl border border-cv-border p-8 text-center">
           <List size={40} className="text-cv-accent mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-cv-text mb-1">
+          <h3 className="text-lg font-display font-semibold text-cv-text mb-1">
             Ready to add cards to <span className="text-cv-accent">{selectedSetName}</span>
           </h3>
           <p className="text-sm text-cv-muted mb-6 max-w-md mx-auto">
             Open the checklist wizard to paste and parse your Beckett checklist section by section — with parallels, card counts, and auto-validation.
           </p>
           <button onClick={() => setWizardOpen(true)}
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-medium bg-cv-accent text-cv-dark hover:bg-cv-accent/90 transition-all">
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 transition-all">
             <Plus size={18} /> Add Checklist
           </button>
         </div>

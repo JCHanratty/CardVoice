@@ -7,7 +7,7 @@ import {
   AlertTriangle, Settings, CornerDownRight
 } from 'lucide-react';
 
-// ---- Reusable sub-components (unchanged content) ----
+// ---- Reusable sub-components ----
 
 function Section({ icon: Icon, title, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -21,7 +21,7 @@ function Section({ icon: Icon, title, children, defaultOpen = false }) {
           <div className="p-2 rounded-lg bg-cv-accent/10">
             <Icon size={18} className="text-cv-accent" />
           </div>
-          <h3 className="text-base font-bold text-cv-text">{title}</h3>
+          <h3 className="text-base font-display font-bold text-cv-text">{title}</h3>
         </div>
         <ChevronDown
           size={18}
@@ -55,9 +55,9 @@ function Tip({ children }) {
 
 function Warn({ children }) {
   return (
-    <div className="flex gap-2 mt-3 px-3 py-2 rounded-lg bg-cv-yellow/5 border border-cv-yellow/20">
-      <AlertTriangle size={14} className="text-cv-yellow flex-shrink-0 mt-0.5" />
-      <span className="text-xs text-cv-yellow/90">{children}</span>
+    <div className="flex gap-2 mt-3 px-3 py-2 rounded-lg bg-cv-gold/5 border border-cv-gold/20">
+      <AlertTriangle size={14} className="text-cv-gold flex-shrink-0 mt-0.5" />
+      <span className="text-xs text-cv-gold/90">{children}</span>
     </div>
   );
 }
@@ -225,7 +225,7 @@ function EditingTab() {
             <span className="text-cv-text font-mono">"7"</span>
             <ArrowRight size={11} className="text-cv-accent" />
             <span className="text-cv-accent font-mono font-bold">67</span>
-            <span className="text-cv-yellow text-[10px] uppercase font-semibold ml-1">inferred</span>
+            <span className="text-cv-gold text-[10px] uppercase font-semibold ml-1">inferred</span>
           </div>
           <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-cv-dark border border-cv-border text-xs">
             <span className="text-cv-muted">Recent entries:</span>
@@ -239,7 +239,7 @@ function EditingTab() {
         </div>
 
         <p className="text-sm text-cv-text/70 mb-2">
-          Inferred numbers flash <span className="text-cv-yellow font-semibold">yellow</span> with an "inferred" badge so you always know when the system made a guess.
+          Inferred numbers flash <span className="text-cv-gold font-semibold">gold</span> with an "inferred" badge so you always know when the system made a guess.
           The badge fades after 3 seconds. If the guess was wrong, just click the number and fix it.
         </p>
 
@@ -362,7 +362,7 @@ function SetsTab() {
           </div>
           <div className="flex items-start gap-3">
             <div className="p-1 rounded bg-cv-dark border border-cv-border flex-shrink-0 mt-0.5">
-              <Zap size={12} className="text-cv-yellow" />
+              <Zap size={12} className="text-cv-gold" />
             </div>
             <div>
               <div className="text-sm text-cv-text font-semibold">Parallel</div>
@@ -474,7 +474,7 @@ export default function HowTo() {
   return (
     <div className="max-w-5xl mx-auto">
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-cv-text">How to Use CardVoice</h2>
+        <h2 className="text-2xl font-display font-bold text-cv-text">How to Use CardVoice</h2>
         <p className="text-sm text-cv-muted mt-1">
           Voice-powered sports card inventory. Speak your card numbers, review, commit, save.
         </p>

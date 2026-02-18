@@ -2,8 +2,7 @@ import React from 'react';
 
 /**
  * CardVoice Logo — a playing card shape with an integrated sound wave / mic motif.
- * The card has a rounded-corner rectangle outline with a mic icon inside,
- * flanked by sound wave arcs radiating outward.
+ * Luxury vault aesthetic: burgundy + gold color scheme.
  */
 export default function Logo({ size = 40, className = '' }) {
   const s = size;
@@ -18,23 +17,23 @@ export default function Logo({ size = 40, className = '' }) {
     >
       <defs>
         <linearGradient id="cv-card-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#00d4aa" />
-          <stop offset="100%" stopColor="#6366f1" />
+          <stop offset="0%" stopColor="#8B2252" />
+          <stop offset="100%" stopColor="#D4A847" />
         </linearGradient>
         <linearGradient id="cv-mic-grad" x1="50%" y1="0%" x2="50%" y2="100%">
-          <stop offset="0%" stopColor="#ffffff" />
-          <stop offset="100%" stopColor="#e2e8f0" />
+          <stop offset="0%" stopColor="#F0D78C" />
+          <stop offset="100%" stopColor="#D4A847" />
         </linearGradient>
         <linearGradient id="cv-wave-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#00d4aa" stopOpacity="0.9" />
-          <stop offset="100%" stopColor="#6366f1" stopOpacity="0.6" />
+          <stop offset="0%" stopColor="#D4A847" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#8B2252" stopOpacity="0.6" />
         </linearGradient>
       </defs>
 
       {/* Card shape — rounded rectangle with gradient stroke */}
       <rect
         x="12" y="4" width="40" height="56" rx="6"
-        fill="#0f1419"
+        fill="#18181B"
         stroke="url(#cv-card-grad)"
         strokeWidth="2.5"
       />
@@ -100,9 +99,9 @@ export default function Logo({ size = 40, className = '' }) {
         opacity="0.4"
       />
 
-      {/* Corner suit accents — red diamonds */}
-      <path d="M18 12 L20 14 L18 16 L16 14 Z" fill="#ef4444" opacity="0.8" />
-      <path d="M46 48 L48 50 L46 52 L44 50 Z" fill="#ef4444" opacity="0.8" />
+      {/* Corner suit accents — gold diamonds */}
+      <path d="M18 12 L20 14 L18 16 L16 14 Z" fill="#D4A847" opacity="0.8" />
+      <path d="M46 48 L48 50 L46 52 L44 50 Z" fill="#D4A847" opacity="0.8" />
     </svg>
   );
 }

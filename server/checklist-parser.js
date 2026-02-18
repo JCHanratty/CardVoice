@@ -1,6 +1,6 @@
 /**
  * CardVoice Checklist Parser (LEGACY)
- * Ported from BaseballBinder's checklist_parser_backend.py + backend/parsing.py
+ * Ported from JCHanratty's checklist_parser_backend.py + backend/parsing.py
  *
  * DEPRECATED: Replaced by hardened-parser.js (ported from CNNSCAN's hardened_parser.py).
  * Kept for backward compatibility and test coverage. Use hardened-parser.js for new code.

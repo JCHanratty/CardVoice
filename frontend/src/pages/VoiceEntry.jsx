@@ -28,41 +28,30 @@ const WORD_MAP = {
 };
 
 // ============================================================
-// Context Inference + Correction Learning
+// Range Detection
 // ============================================================
 
-function inferDecade(entries) {
-  if (entries.length < 2) return 0;
-  const recent = entries.slice(-5).map(e => e.num);
-  const decades = recent.map(n => Math.floor(n / 10) * 10);
-  const freq = {};
-  decades.forEach(d => { freq[d] = (freq[d] || 0) + 1; });
-  const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
-  if (sorted.length === 0) return 0;
-  const [topDecade, topCount] = sorted[0];
-  return topCount >= 2 && parseInt(topDecade) >= 10 ? parseInt(topDecade) : 0;
-}
+const RANGE_KEYWORDS = ['range', 'through', 'thru'];
 
-function inferFromContext(num, entries) {
-  if (num >= 10 || entries.length < 2) return { num, inferred: false };
-
-  // Check learned corrections first
-  const decade = inferDecade(entries);
-  if (decade >= 10) {
-    const corrections = JSON.parse(localStorage.getItem('cardvoice_corrections') || '{}');
-    const key = `${num}_${decade}`;
-    if (corrections[key] && corrections[key].count >= 2) {
-      return { num: corrections[key].corrected, inferred: true };
+function detectRange(text) {
+  if (!text) return null;
+  const cleaned = text.toLowerCase().replace(/[,.!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const kw of RANGE_KEYWORDS) {
+    const idx = cleaned.indexOf(kw);
+    if (idx === -1) continue;
+    const before = cleaned.substring(0, idx).trim();
+    const after = cleaned.substring(idx + kw.length).trim();
+    const startNums = parseSpokenNumbers(before);
+    const endNums = parseSpokenNumbers(after);
+    if (startNums.length > 0 && endNums.length > 0) {
+      const start = startNums[startNums.length - 1];
+      const end = endNums[0];
+      if (start >= 1 && end >= 1 && start <= 9999 && end <= 9999 && start !== end) {
+        return { start: Math.min(start, end), end: Math.max(start, end) };
+      }
     }
   }
-
-  // Statistical decade inference
-  if (decade >= 10) {
-    const corrected = decade + num;
-    if (corrected <= 9999) return { num: corrected, inferred: true };
-  }
-
-  return { num, inferred: false };
+  return null;
 }
 
 const SKIP_WORDS = new Set(['and','the','a','an','um','uh','like','okay','ok','card','number','hash','pound','next','then','also','have','got','need','want','is','are','it','that','this','so','yeah','yes','no','not','with','from']);
@@ -77,7 +66,11 @@ function parseTokenNum(t) {
 
 function parseSpokenNumbers(text, prevLastNum = null) {
   if (!text) return [];
-  text = text.toLowerCase().replace(/[-]/g, ' ').replace(/[,.!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+  text = text.toLowerCase()
+    .replace(/(?<!\d)\d(-\d)+(?!\d)/g, m => m.replace(/-/g, ''))  // join single-digit chains: "7-2"→"72", "2-2-2"→"222"
+    .replace(/[-]/g, ' ')          // remaining hyphens → spaces (word-hyphen-word)
+    .replace(/[,.!?;:]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
   const tokens = text.split(' ');
   const results = [];
   let lastNum = prevLastNum;
@@ -162,6 +155,7 @@ export default function VoiceEntry() {
   const [committed, setCommitted] = useState([]);
   const [rawTranscripts, setRawTranscripts] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [pendingRange, setPendingRange] = useState(null);
 
   // ---- Session stats tracking ----
   const sessionStartRef = useRef(null);
@@ -169,40 +163,32 @@ export default function VoiceEntry() {
   const statsRef = useRef({ totalEntriesAdded: 0, edits: 0, deletes: 0 });
   const [sessionActive, setSessionActive] = useState(false);
 
-  // Ref keeps latest entries accessible inside callbacks without stale closures
-  const currentEntriesRef = useRef(currentEntries);
-  currentEntriesRef.current = currentEntries;
+  // Buffer rapid finals together (handles Speech API splitting "seventy" + "two" across restarts)
+  const lastFinalRef = useRef({ text: '', time: 0 });
+  const finalBufferRef = useRef('');
+  const finalTimerRef = useRef(null);
 
   // ---- Entry helpers ----
   const addNumbers = useCallback((nums) => {
     if (!nums || nums.length === 0) return;
     statsRef.current.totalEntriesAdded += nums.length;
-    // Compute inferred last number BEFORE setState (safe under React 18 batching)
-    // Uses ref snapshot — same entries the updater will see as `prev`
-    const lastRaw = nums[nums.length - 1];
-    const lastInferred = inferFromContext(lastRaw, currentEntriesRef.current);
 
     setCurrentEntries(prev => {
-      let updated = prev.map(e => ({ ...e })); // deep-copy entries
+      let updated = prev.map(e => ({ ...e }));
       const counts = {};
-      nums.forEach(n => {
-        const result = inferFromContext(n, updated);
-        const finalNum = result.num;
-        counts[finalNum] = counts[finalNum] || { qty: 0, inferred: result.inferred };
-        counts[finalNum].qty++;
-      });
-      for (const [numStr, info] of Object.entries(counts)) {
+      nums.forEach(n => { counts[n] = (counts[n] || 0) + 1; });
+      for (const [numStr, count] of Object.entries(counts)) {
         const num = parseInt(numStr);
         const idx = updated.findIndex(e => e.num === num);
         if (idx >= 0) {
-          updated[idx] = { ...updated[idx], qty: updated[idx].qty + info.qty, inferred: info.inferred || updated[idx].inferred };
+          updated[idx] = { ...updated[idx], qty: updated[idx].qty + count };
         } else {
-          updated.push({ id: ++entryIdRef.current, num, qty: info.qty, inferred: info.inferred });
+          updated.push({ id: ++entryIdRef.current, num, qty: count });
         }
       }
       return updated;
     });
-    setLastNumber(lastInferred.num);
+    setLastNumber(nums[nums.length - 1]);
   }, []);
 
   const updateEntry = useCallback((id, field, value) => {
@@ -216,35 +202,9 @@ export default function VoiceEntry() {
 
   const handleNumEdit = useCallback((id, oldNum, newNum) => {
     if (oldNum === newNum || isNaN(newNum) || newNum < 1) return;
-    if (typeof oldNum !== 'number' || oldNum < 1) {
-      // Old value was empty/invalid — just set, don't log correction
-      updateEntry(id, 'num', newNum);
-      return;
-    }
-    statsRef.current.edits++;
+    if (typeof oldNum === 'number' && oldNum >= 1) statsRef.current.edits++;
     updateEntry(id, 'num', newNum);
-    // Log correction for learning (read current state via ref, not setter)
-    const entries = currentEntriesRef.current;
-    const decade = inferDecade(entries);
-    if (decade >= 10 && oldNum < 10) {
-      const key = `${oldNum}_${decade}`;
-      const corrections = JSON.parse(localStorage.getItem('cardvoice_corrections') || '{}');
-      corrections[key] = corrections[key] || { corrected: newNum, count: 0 };
-      corrections[key].corrected = newNum;
-      corrections[key].count++;
-      localStorage.setItem('cardvoice_corrections', JSON.stringify(corrections));
-    }
   }, [updateEntry]);
-
-  // Clear inferred flags after 3 seconds
-  useEffect(() => {
-    const hasInferred = currentEntries.some(e => e.inferred);
-    if (!hasInferred) return;
-    const timer = setTimeout(() => {
-      setCurrentEntries(prev => prev.map(e => e.inferred ? { ...e, inferred: false } : e));
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [currentEntries]);
 
   // Warn before losing unsaved work (browser refresh / tab close)
   const hasUnsaved = currentEntries.length > 0 || committed.length > 0;
@@ -294,33 +254,73 @@ export default function VoiceEntry() {
     } catch (err) { alert(err.response?.data?.detail || 'Failed'); }
   };
 
+  const processBuffer = useCallback(() => {
+    const buffered = finalBufferRef.current.trim();
+    finalBufferRef.current = '';
+    finalTimerRef.current = null;
+    if (!buffered) return;
+
+    // Debounce: skip duplicate finals within 500ms
+    const now = Date.now();
+    if (buffered === lastFinalRef.current.text && now - lastFinalRef.current.time < 500) return;
+    lastFinalRef.current = { text: buffered, time: now };
+
+    setRawTranscripts(p => [...p, buffered]);
+
+    // Check for range pattern first (e.g. "150 range 199", "50 through 99")
+    const range = detectRange(buffered);
+    if (range) {
+      setPendingRange(range);
+      return;
+    }
+
+    // If text contains "card", try to auto-apply quantities via API
+    if (buffered.toLowerCase().includes('card') && selectedSetId) {
+      axios.put(`${API}/api/sets/${selectedSetId}/voice-qty`, { text: buffered, insert_type: insertType })
+        .then(res => {
+          if (res.data.parsed_pairs && res.data.parsed_pairs.length > 0) {
+            let allNums = [];
+            res.data.parsed_pairs.forEach(pair => {
+              for (let i = 0; i < pair.qty; i++) allNums.push(pair.card);
+            });
+            addNumbers(allNums);
+          }
+        })
+        .catch(() => {});
+    } else {
+      const nums = parseSpokenNumbers(buffered, lastNumber);
+      if (nums.length > 0) addNumbers(nums);
+    }
+  }, [selectedSetId, insertType, lastNumber, addNumbers]);
+
   const handleVoiceResult = useCallback((text, isFinal) => {
     setLiveText(text);
     if (isFinal) {
-      setRawTranscripts(p => [...p, text]);
-      // If text contains "card", try to auto-apply quantities via API
-      if (text.toLowerCase().includes('card') && selectedSetId) {
-        axios.put(`${API}/api/sets/${selectedSetId}/voice-qty`, { text, insert_type: insertType })
-          .then(res => {
-            if (res.data.parsed_pairs && res.data.parsed_pairs.length > 0) {
-              let allNums = [];
-              res.data.parsed_pairs.forEach(pair => {
-                for (let i = 0; i < pair.qty; i++) allNums.push(pair.card);
-              });
-              addNumbers(allNums);
-            }
-          })
-          .catch(() => {});
-      } else {
-        const nums = parseSpokenNumbers(text, lastNumber);
-        if (nums.length > 0) addNumbers(nums);
-      }
+      // Buffer rapid finals together — the Speech API often splits compound numbers
+      // across recognition restarts (e.g. "seventy" then "two" as separate finals)
+      finalBufferRef.current += (finalBufferRef.current ? ' ' : '') + text;
+      if (finalTimerRef.current) clearTimeout(finalTimerRef.current);
+
+      // If buffer ends with a multiplier word ("count", "times", etc.), wait longer
+      // so the user has time to say the quantity number
+      const lastWord = finalBufferRef.current.trim().split(/\s+/).pop()?.toLowerCase();
+      const waitMs = MULT_WORDS.has(lastWord) ? 2500 : 300;
+
+      finalTimerRef.current = setTimeout(processBuffer, waitMs);
     }
-  }, [selectedSetId, insertType, lastNumber, addNumbers]);
+  }, [processBuffer]);
 
   const { isListening, start, stop, error } = useVoiceRecognition({ onResult: handleVoiceResult });
 
   const handleManualSubmit = (e) => { e.preventDefault(); const nums = parseSpokenNumbers(manualInput); if (nums.length > 0) { addNumbers(nums); setManualInput(''); } };
+
+  const confirmRange = () => {
+    if (!pendingRange) return;
+    const nums = [];
+    for (let n = pendingRange.start; n <= pendingRange.end; n++) nums.push(n);
+    addNumbers(nums);
+    setPendingRange(null);
+  };
 
   const commitBatch = () => {
     const valid = currentEntries.filter(e => typeof e.num === 'number' && e.num >= 1 && e.qty >= 1);
@@ -422,7 +422,7 @@ export default function VoiceEntry() {
               <div className="flex gap-2 mt-2">
                 <input type="text" value={newSetName} onChange={e => setNewSetName(e.target.value)} placeholder="e.g., 2022 Topps" autoFocus onKeyDown={e => e.key === 'Enter' && createSet()}
                   className="flex-1 bg-cv-dark border border-cv-border rounded-lg px-3 py-2 text-sm text-cv-text focus:border-cv-accent focus:outline-none" />
-                <button onClick={createSet} className="px-3 py-2 rounded-lg text-sm bg-cv-accent text-cv-dark font-medium">Create</button>
+                <button onClick={createSet} className="px-3 py-2 rounded-lg text-sm bg-gradient-to-r from-cv-accent to-cv-accent2 text-white font-medium">Create</button>
               </div>
             )}
           </div>
@@ -473,10 +473,10 @@ export default function VoiceEntry() {
           ) : (
             <>
               <span className="text-cv-muted">Recording as:</span>
-              {selectedSetYear && <span className="text-cv-yellow font-mono font-semibold text-xs mr-1">{selectedSetYear}</span>}
+              {selectedSetYear && <span className="text-cv-gold font-mono font-semibold text-xs mr-1">{selectedSetYear}</span>}
               {selectedSetName && <><span className="text-cv-accent font-semibold">{selectedSetName}</span><ChevronRight size={14} className="text-cv-muted" /></>}
               <span className="text-cv-text">{insertType || 'Base'}</span>
-              {parallel && <><ChevronRight size={14} className="text-cv-muted" /><span className="text-cv-yellow">{parallel}</span></>}
+              {parallel && <><ChevronRight size={14} className="text-cv-muted" /><span className="text-cv-gold">{parallel}</span></>}
               {prefix && <><span className="text-cv-muted ml-2">|</span><span className="text-cv-muted">Prefix:</span><span className="text-cv-text font-mono">{prefix}</span></>}
             </>
           )}
@@ -494,7 +494,7 @@ export default function VoiceEntry() {
                     if (!sessionStartRef.current) { sessionStartRef.current = Date.now(); setSessionActive(true); }
                   }
                 }} disabled={!selectedSetId}
-                className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all flex-shrink-0 ${!selectedSetId ? 'bg-cv-muted/30 text-cv-muted cursor-not-allowed' : isListening ? 'bg-cv-red text-white recording-pulse shadow-lg shadow-red-500/30' : 'bg-cv-accent text-cv-dark hover:scale-105 shadow-lg shadow-emerald-500/20'}`}
+                className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all flex-shrink-0 ${!selectedSetId ? 'bg-cv-muted/30 text-cv-muted cursor-not-allowed' : isListening ? 'bg-cv-red text-white recording-pulse shadow-lg shadow-red-500/30' : 'bg-cv-accent text-white hover:scale-105 shadow-lg shadow-cv-accent/20'}`}
                 title={!selectedSetId ? 'Select a set first' : ''}>
                 {isListening ? <MicOff size={32} /> : <Mic size={32} />}
               </button>
@@ -514,6 +514,25 @@ export default function VoiceEntry() {
             </div>
             {liveText && <div className="mt-4 bg-cv-dark rounded-lg p-2 border border-cv-border"><div className="flex items-center gap-2"><Volume2 size={12} className="text-cv-accent" /><span className="text-xs text-cv-muted">Live:</span><span className="text-sm text-cv-text/70 font-mono">{liveText}</span></div></div>}
             {error && <div className="mt-3 bg-cv-red/10 border border-cv-red/30 rounded-lg p-2 flex items-center gap-2"><AlertCircle size={14} className="text-cv-red" /><span className="text-sm text-cv-red">{error}</span></div>}
+            {pendingRange && (
+              <div className="mt-3 bg-cv-gold/10 border border-cv-gold/30 rounded-lg p-3 flex items-center justify-between">
+                <div>
+                  <span className="text-sm text-cv-text">Add cards </span>
+                  <span className="text-sm text-cv-gold font-mono font-bold">{prefix}{pendingRange.start}</span>
+                  <span className="text-sm text-cv-muted"> – </span>
+                  <span className="text-sm text-cv-gold font-mono font-bold">{prefix}{pendingRange.end}</span>
+                  <span className="text-sm text-cv-muted ml-2">({pendingRange.end - pendingRange.start + 1} cards)</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={confirmRange} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-cv-accent/20 border border-cv-accent/40 text-cv-accent hover:bg-cv-accent/30">
+                    <Check size={12} /> Confirm
+                  </button>
+                  <button onClick={() => setPendingRange(null)} className="px-3 py-1.5 rounded-lg text-xs text-cv-muted hover:text-cv-text">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {sessionActive && (
@@ -523,7 +542,7 @@ export default function VoiceEntry() {
                 <span className="text-sm font-mono text-cv-text">{formatTime(elapsedSeconds)}</span>
               </div>
               <div className="flex items-center gap-2">
-                <Zap size={14} className="text-cv-yellow" />
+                <Zap size={14} className="text-cv-gold" />
                 <span className="text-sm font-mono text-cv-text">{cardsPerMinute}</span>
                 <span className="text-xs text-cv-muted">cards/min</span>
               </div>
@@ -560,7 +579,7 @@ export default function VoiceEntry() {
             <div className="max-h-[200px] overflow-y-auto space-y-1">
               {currentEntries.length === 0 && <span className="text-cv-muted text-sm block text-center py-4">No numbers yet - speak or type to add</span>}
               {[...currentEntries].reverse().map(entry => (
-                <div key={entry.id} className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors ${entry.inferred ? 'bg-cv-yellow/10 border border-cv-yellow/30' : 'bg-cv-dark border border-cv-border'}`}>
+                <div key={entry.id} className="flex items-center gap-2 px-2 py-1.5 rounded transition-colors bg-cv-dark border border-cv-border">
                   {prefix && <span className="text-cv-muted text-xs font-mono">{prefix}</span>}
                   <input
                     type="text"
@@ -578,13 +597,12 @@ export default function VoiceEntry() {
                       className="w-6 h-6 rounded flex items-center justify-center text-cv-muted hover:text-cv-text hover:bg-cv-border/30">
                       <Minus size={12} />
                     </button>
-                    <span className="text-sm font-mono text-cv-yellow w-6 text-center">{entry.qty}</span>
+                    <span className="text-sm font-mono text-cv-gold w-6 text-center">{entry.qty}</span>
                     <button onClick={() => updateEntry(entry.id, 'qty', entry.qty + 1)}
                       className="w-6 h-6 rounded flex items-center justify-center text-cv-muted hover:text-cv-text hover:bg-cv-border/30">
                       <Plus size={12} />
                     </button>
                   </div>
-                  {entry.inferred && <span className="text-[9px] text-cv-yellow font-semibold uppercase tracking-wider">inferred</span>}
                   <button onClick={() => deleteEntry(entry.id)}
                     className="w-6 h-6 rounded flex items-center justify-center text-cv-muted hover:text-cv-red ml-1">
                     <Trash2 size={12} />
@@ -626,7 +644,7 @@ export default function VoiceEntry() {
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-xs">
                       <span className="text-cv-text font-semibold">{batch.insertType}</span>
-                      {batch.parallel && <><ChevronRight size={10} className="text-cv-muted" /><span className="text-cv-yellow">{batch.parallel}</span></>}
+                      {batch.parallel && <><ChevronRight size={10} className="text-cv-muted" /><span className="text-cv-gold">{batch.parallel}</span></>}
                       {batch.prefix && <span className="text-cv-muted font-mono ml-1">({batch.prefix}*)</span>}
                       <span className="text-cv-muted">· {batch.timestamp}</span>
                     </div>
@@ -636,7 +654,7 @@ export default function VoiceEntry() {
                     {batch.entries.map((entry, j) => (
                       <span key={j} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-cv-panel text-xs font-mono">
                         <span className="text-cv-text">{entry.num}</span>
-                        {entry.qty > 1 && <span className="text-cv-yellow">x{entry.qty}</span>}
+                        {entry.qty > 1 && <span className="text-cv-gold">x{entry.qty}</span>}
                       </span>
                     ))}
                   </div>

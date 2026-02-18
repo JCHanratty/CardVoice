@@ -67,9 +67,17 @@ async function scrapeEbaySold(query) {
   });
 
   const url = `${BROWSE_API_URL}?${params.toString()}`;
+  const TIMEOUT_MS = 30000;
+
+  const fetchWithTimeout = (fetchUrl, options) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    return fetch(fetchUrl, { ...options, signal: controller.signal })
+      .finally(() => clearTimeout(timer));
+  };
 
   try {
-    const resp = await fetch(url, {
+    const resp = await fetchWithTimeout(url, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
@@ -89,7 +97,7 @@ async function scrapeEbaySold(query) {
       } catch (err) {
         return { error: err.message, results: [] };
       }
-      const retry = await fetch(url, {
+      const retry = await fetchWithTimeout(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
@@ -110,6 +118,9 @@ async function scrapeEbaySold(query) {
     const data = await resp.json();
     return parseResults(data);
   } catch (err) {
+    if (err.name === 'AbortError') {
+      return { error: 'Request timed out (30s)', results: [] };
+    }
     return { error: err.message, results: [] };
   }
 }
@@ -188,10 +199,16 @@ function buildSetQuery(set) {
   return `${set.year} ${set.name} complete set`;
 }
 
+function buildInsertSetQuery(set, insertTypeName, queryOverride) {
+  if (queryOverride) return queryOverride;
+  return `${set.year} ${set.name} ${insertTypeName} complete set`;
+}
+
 module.exports = {
   scrapeEbaySold,
   filterOutliers,
   buildCardQuery,
   buildSetQuery,
+  buildInsertSetQuery,
   getToken,
 };

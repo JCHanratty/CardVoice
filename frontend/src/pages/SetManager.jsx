@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Trash2, Upload, Mic, ExternalLink, Database, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, Upload, Mic, ExternalLink, Database, Loader2, ChevronDown, ChevronRight, LayoutGrid, List } from 'lucide-react';
 import axios from 'axios';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -10,6 +10,7 @@ export default function SetManager() {
   const [importing, setImporting] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [collapsedYears, setCollapsedYears] = useState(null);
+  const [viewMode, setViewMode] = useState('grid');
 
   useEffect(() => {
     loadSets();
@@ -121,11 +122,11 @@ export default function SetManager() {
     });
   }, [sets]);
 
-  // Default all years to collapsed on first load
+  // Default all years to expanded on first load
   useEffect(() => {
     if (grouped.length > 0 && collapsedYears === null) {
       const all = {};
-      grouped.forEach(([yr]) => { all[yr] = true; });
+      grouped.forEach(([yr]) => { all[yr] = false; });
       setCollapsedYears(all);
     }
   }, [grouped, collapsedYears]);
@@ -143,14 +144,30 @@ export default function SetManager() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-cv-text">My Sets</h2>
+          <h2 className="text-2xl font-display font-bold text-cv-text">My Sets</h2>
           <p className="text-sm text-cv-muted mt-1">
             {sets.length} set{sets.length !== 1 ? 's' : ''} · {totalCards.toLocaleString()} cards · {totalOwned.toLocaleString()} owned
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center bg-cv-panel border border-cv-border/50 rounded-lg overflow-hidden mr-1">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-cv-accent/15 text-cv-accent' : 'text-cv-muted hover:text-cv-text'}`}
+              title="Grid view"
+            >
+              <LayoutGrid size={16} />
+            </button>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`p-2 transition-colors ${viewMode === 'list' ? 'bg-cv-accent/15 text-cv-accent' : 'text-cv-muted hover:text-cv-text'}`}
+              title="List view"
+            >
+              <List size={16} />
+            </button>
+          </div>
           <button onClick={migrateFromCardVision} disabled={migrating}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50 transition-all">
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cv-gold/10 border border-cv-gold/30 text-cv-gold hover:bg-cv-gold/20 disabled:opacity-50 transition-all">
             {migrating ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
             {migrating ? 'Migrating...' : 'Import from CardVision'}
           </button>
@@ -160,7 +177,7 @@ export default function SetManager() {
             <input type="file" accept=".csv,.txt" onChange={handleFileImport} className="hidden" />
           </label>
           <Link to="/sets/add"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent/80 text-cv-dark hover:shadow-lg hover:shadow-cv-accent/20 transition-all">
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 transition-all">
             <Plus size={14} /> New Set
           </Link>
         </div>
@@ -179,7 +196,7 @@ export default function SetManager() {
       ) : (
         <div className="space-y-6">
           {grouped.map(([year, yearSets]) => {
-            const collapsed = !collapsedYears || !!collapsedYears[year];
+            const collapsed = collapsedYears ? !!collapsedYears[year] : false;
             const yearCards = yearSets.reduce((a, s) => a + (s.total_cards || 0), 0);
             const yearOwned = yearSets.reduce((a, s) => a + (s.owned_count || 0), 0);
             const pct = yearCards > 0 ? Math.round((yearOwned / yearCards) * 100) : 0;
@@ -187,33 +204,33 @@ export default function SetManager() {
               <div key={year}>
                 {/* Year Header */}
                 <button onClick={() => toggleYear(year)}
-                  className="flex items-center gap-3 mb-3 group w-full text-left">
-                  <div className="flex items-center gap-2">
+                  className="w-full mb-3 group text-left bg-cv-panel/60 rounded-xl border border-cv-border/30 px-4 py-3 hover:border-cv-accent/30 transition-all">
+                  <div className="flex items-center gap-3">
                     {collapsed
-                      ? <ChevronRight size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors" />
-                      : <ChevronDown size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors" />
+                      ? <ChevronRight size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors shrink-0" />
+                      : <ChevronDown size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors shrink-0" />
                     }
                     <span className="text-xl font-bold text-cv-text group-hover:text-cv-accent transition-colors">{year}</span>
-                  </div>
-                  <span className="text-xs text-cv-muted">
-                    {yearSets.length} set{yearSets.length !== 1 ? 's' : ''} · {yearCards.toLocaleString()} cards
-                  </span>
-                  <div className="flex-1 mx-4">
-                    <div className="progress-bar">
-                      <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
+                    <span className="text-xs text-cv-muted">
+                      {yearSets.length} set{yearSets.length !== 1 ? 's' : ''} · {yearCards.toLocaleString()} cards · {yearOwned.toLocaleString()} owned
+                    </span>
+                    <div className="ml-auto flex items-center gap-2.5">
+                      <div className="w-48 h-1.5 bg-cv-border/50 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs font-mono text-cv-accent">{pct}%</span>
                     </div>
                   </div>
-                  <span className="text-xs font-mono text-cv-accent">{pct}%</span>
                 </button>
 
                 {/* Year Sets Grid */}
-                {!collapsed && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {!collapsed && viewMode === 'grid' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                     {yearSets.map(s => {
                       const ownPct = s.total_cards > 0 ? Math.round(((s.owned_count || 0) / s.total_cards) * 100) : 0;
                       return (
                         <div key={s.id}
-                          className="group bg-cv-panel rounded-xl border border-cv-border/70 p-4 hover:border-cv-accent/40 glow-teal transition-all duration-200 flex flex-col relative overflow-hidden">
+                          className="group bg-cv-panel rounded-xl border border-cv-border/70 p-4 hover:border-cv-accent/40 glow-burgundy transition-all duration-200 flex flex-col relative overflow-hidden">
                           {/* Subtle top accent line */}
                           <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cv-accent/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 
@@ -257,7 +274,7 @@ export default function SetManager() {
                                 </div>
                                 {(s.total_qty > 0) && (
                                   <div className="text-xs text-cv-muted mt-1">
-                                    <span className="text-cv-yellow font-semibold font-mono">{s.total_qty}</span> total qty
+                                    <span className="text-cv-gold font-semibold font-mono">{s.total_qty}</span> total qty
                                   </div>
                                 )}
                               </div>
@@ -277,13 +294,75 @@ export default function SetManager() {
                               </Link>
                             </div>
                             <button onClick={() => deleteSet(s.id, s.name)}
-                              className="p-1.5 rounded-lg text-cv-muted/50 hover:text-cv-red hover:bg-cv-red/10 transition-all opacity-0 group-hover:opacity-100">
+                              className="p-1.5 rounded-lg text-cv-muted/40 hover:text-cv-red hover:bg-cv-red/10 transition-all">
                               <Trash2 size={14} />
                             </button>
                           </div>
                         </div>
                       );
                     })}
+                  </div>
+                )}
+
+                {!collapsed && viewMode === 'list' && (
+                  <div className="bg-cv-panel rounded-xl border border-cv-border/50 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-cv-border/30">
+                          <th className="text-left py-2.5 px-4 text-xs text-cv-muted uppercase font-semibold">Name</th>
+                          <th className="text-left py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-20">Brand</th>
+                          <th className="text-center py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-20">Cards</th>
+                          <th className="text-left py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-44">Progress</th>
+                          <th className="text-center py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-24">Owned</th>
+                          <th className="w-24"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {yearSets.map(s => {
+                          const ownPct = s.total_cards > 0 ? Math.round(((s.owned_count || 0) / s.total_cards) * 100) : 0;
+                          return (
+                            <tr key={s.id} className="group border-b border-cv-border/20 hover:bg-white/[0.03] transition-colors">
+                              <td className="py-2.5 px-4">
+                                <Link to={`/sets/${s.id}`} className="text-cv-text font-semibold hover:text-cv-accent transition-colors">
+                                  {s.name}
+                                </Link>
+                              </td>
+                              <td className="py-2.5 px-3">
+                                {s.brand && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-cv-accent2/10 text-cv-accent2 border border-cv-accent2/20">
+                                    {s.brand}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-cv-muted font-mono">{s.total_cards}</td>
+                              <td className="py-2.5 px-3">
+                                <div className="flex items-center gap-2">
+                                  <div className="flex-1 h-1.5 bg-cv-border/50 rounded-full overflow-hidden">
+                                    <div className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full" style={{ width: `${ownPct}%` }} />
+                                  </div>
+                                  <span className="text-xs font-mono text-cv-accent w-8 text-right">{ownPct}%</span>
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-cv-muted font-mono">{s.owned_count || 0}/{s.total_cards}</td>
+                              <td className="py-2.5 px-3">
+                                <div className="flex items-center gap-1 justify-end">
+                                  <Link to={`/voice/${s.id}`} className="p-1.5 rounded-lg text-cv-accent hover:bg-cv-accent/10 transition-all" title="Voice entry">
+                                    <Mic size={14} />
+                                  </Link>
+                                  <Link to={`/sets/${s.id}`} className="p-1.5 rounded-lg text-cv-text hover:bg-white/10 transition-all" title="View set">
+                                    <ExternalLink size={14} />
+                                  </Link>
+                                  <button onClick={() => deleteSet(s.id, s.name)}
+                                    className="p-1.5 rounded-lg text-cv-muted/50 hover:text-cv-red hover:bg-cv-red/10 transition-all" title="Delete">
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>

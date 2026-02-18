@@ -1,5 +1,5 @@
 /**
- * Dry-run migration test against the real BaseballBinder database.
+ * Dry-run migration test against the real JCHanratty database.
  * Uses an in-memory CardVoice DB so nothing is written to disk.
  * Run: node tests/test-migration-dry-run.js
  */
@@ -18,7 +18,7 @@ let binderDb;
 try {
   binderDb = new Database(binderDbPath, { readonly: true });
 } catch (err) {
-  console.log('Could not open BaseballBinder DB:', err.message);
+  console.log('Could not open JCHanratty DB:', err.message);
   console.log('Skipping migration dry-run test.');
   process.exit(0);
 }

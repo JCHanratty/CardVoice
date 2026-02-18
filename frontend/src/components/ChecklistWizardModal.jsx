@@ -5,10 +5,10 @@ import axios from 'axios';
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const SECTION_TYPE_COLORS = {
-  base:      'text-cyan-400 bg-cyan-400/10 border border-cyan-400/30',
-  autograph: 'text-amber-400 bg-amber-400/10 border border-amber-400/30',
+  base:      'text-cv-accent bg-cv-accent/10 border border-cv-accent/30',
+  autograph: 'text-cv-gold bg-cv-gold/10 border border-cv-gold/30',
   relic:     'text-emerald-400 bg-emerald-400/10 border border-emerald-400/30',
-  insert:    'text-purple-400 bg-purple-400/10 border border-purple-400/30',
+  insert:    'text-cv-accent2 bg-cv-accent2/10 border border-cv-accent2/30',
 };
 
 const EMPTY_SECTION = {
@@ -53,7 +53,6 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
     if (currentSection.declaredCount) text += `${currentSection.declaredCount} cards.\n`;
     if (currentSection.parallelsRaw.trim()) {
       const raw = currentSection.parallelsRaw.trim();
-      // If multi-line, convert to inline format
       if (raw.includes('\n')) {
         const items = raw.split('\n').map(l => l.trim()).filter(Boolean);
         text += `Parallels: ${items.join('; ')}\n`;
@@ -83,7 +82,6 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
       const res = await axios.post(`${API}/api/parse-checklist`, { text });
       const result = res.data;
 
-      // Take the first section from the result (we send one section at a time)
       const parsedSection = result.sections?.[0];
       if (!parsedSection || (!parsedSection.cards?.length && !parsedSection.parallels?.length)) {
         setCurrentSection(prev => ({ ...prev, parseError: 'Parser returned no cards or parallels. Check your input format.' }));
@@ -91,12 +89,10 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
         return;
       }
 
-      // Override section name with user's input (parser may have altered it)
       parsedSection.name = currentSection.name.trim();
 
       const updated = { ...currentSection, parsed: parsedSection, parseError: null };
 
-      // Auto-accept: if declared count matches parsed card count
       const declared = parseInt(currentSection.declaredCount);
       const actual = parsedSection.cards?.length || 0;
       if (declared > 0 && declared === actual) {
@@ -150,7 +146,6 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
   };
 
   const handleFinish = async () => {
-    // Collect all sections to commit
     const allSections = [...sections];
     if (currentSection.parsed && viewMode === 'preview') {
       allSections.push(currentSection);
@@ -174,7 +169,6 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
     setCommitting(false);
   };
 
-  // Totals for sidebar
   const totalCards = sections.reduce((acc, s) => acc + (s.parsed?.cards?.length || 0), 0);
   const totalParallels = sections.reduce((acc, s) => acc + (s.parsed?.parallels?.length || 0), 0);
 
@@ -191,7 +185,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-cv-border">
           <div>
-            <h3 className="text-lg font-semibold text-cv-text">Add Checklist Sections</h3>
+            <h3 className="text-lg font-display font-semibold text-cv-text">Add Checklist Sections</h3>
             <p className="text-xs text-cv-muted mt-0.5">Adding to: <span className="text-cv-accent">{setName}</span></p>
           </div>
           <button onClick={close} className="p-1.5 rounded-lg text-cv-muted hover:text-cv-text hover:bg-cv-dark transition-all">
@@ -203,7 +197,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
         {commitResult && (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
             <CheckCircle size={48} className="text-cv-accent mb-4" />
-            <h3 className="text-xl font-semibold text-cv-text mb-2">Checklist Saved</h3>
+            <h3 className="text-xl font-display font-semibold text-cv-text mb-2">Checklist Saved</h3>
             <p className="text-sm text-cv-muted">
               {commitResult.imported} cards added, {commitResult.updated} updated, {commitResult.parallels_added} parallels
             </p>
@@ -241,7 +235,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
                         <div className="text-xs text-cv-muted space-y-0.5">
                           <div>{s.parsed?.cards?.length || 0} cards</div>
                           {(s.parsed?.parallels?.length || 0) > 0 && (
-                            <div className="text-cv-yellow">{s.parsed.parallels.length} parallel(s)</div>
+                            <div className="text-cv-gold">{s.parsed.parallels.length} parallel(s)</div>
                           )}
                           {s.autoAccepted && (
                             <div className="text-cv-accent flex items-center gap-1">
@@ -272,7 +266,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
                     Total Cards: <span className="text-cv-text font-mono font-semibold">{totalCards}</span>
                   </div>
                   <div className="text-xs text-cv-muted">
-                    Total Parallels: <span className="text-cv-yellow font-mono font-semibold">{totalParallels}</span>
+                    Total Parallels: <span className="text-cv-gold font-mono font-semibold">{totalParallels}</span>
                   </div>
                 </div>
               )}
@@ -329,7 +323,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
 
                   <div className="flex items-center gap-2">
                     <button onClick={handleParse} disabled={parsing}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-cv-accent text-cv-dark hover:bg-cv-accent/90 disabled:opacity-50 transition-all">
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 disabled:opacity-50 transition-all">
                       {parsing ? <Loader2 size={14} className="animate-spin" /> : null}
                       {parsing ? 'Parsing...' : 'Parse Section'}
                     </button>
@@ -345,7 +339,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
                     }`}>
                       {parsedSection?.sectionType || 'insert'}
                     </span>
-                    <h4 className="text-lg font-semibold text-cv-text">{currentSection.name}</h4>
+                    <h4 className="text-lg font-display font-semibold text-cv-text">{currentSection.name}</h4>
                     {declared > 0 && (
                       countsMatch ? (
                         <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-green-500/20 text-green-300 border border-green-500/40">
@@ -371,11 +365,11 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
                       <div className="flex flex-wrap gap-1.5">
                         {parsedSection.parallels.map((p, i) => (
                           <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded bg-cv-dark border border-cv-border text-xs">
-                            <span className="text-cv-yellow font-medium">{p.name || p}</span>
+                            <span className="text-cv-gold font-medium">{p.name || p}</span>
                             {(p.serialMax || p.printRun) && (
                               <span className="text-cv-muted">/{p.serialMax || p.printRun}</span>
                             )}
-                            {p.exclusive && <span className="text-indigo-400">({p.exclusive})</span>}
+                            {p.exclusive && <span className="text-cv-accent2">({p.exclusive})</span>}
                           </span>
                         ))}
                       </div>
@@ -411,7 +405,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
                                 <td className="px-3 py-1.5 text-cv-text">{card.player}</td>
                                 <td className="px-3 py-1.5 text-cv-muted">{card.team}</td>
                                 <td className="px-3 py-1.5">
-                                  {card.rcSp && <span className="text-cv-yellow text-xs font-semibold">{card.rcSp}</span>}
+                                  {card.rcSp && <span className="text-cv-gold text-xs font-semibold">{card.rcSp}</span>}
                                   {card.confidence != null && card.confidence < 0.8 && (
                                     <span className="text-amber-400 text-xs font-mono ml-1">{Math.round(card.confidence * 100)}%</span>
                                   )}
@@ -432,7 +426,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
                   {/* Back to edit */}
                   <button onClick={() => setViewMode('edit')}
                     className="text-xs text-cv-muted hover:text-cv-text underline">
-                    ← Back to Edit
+                    &larr; Back to Edit
                   </button>
                 </div>
               )}
@@ -456,7 +450,7 @@ export default function ChecklistWizardModal({ open, onOpenChange, setId, setNam
               )}
               {(sections.length > 0 || (viewMode === 'preview' && currentSection.parsed)) && (
                 <button onClick={handleFinish} disabled={committing}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-cv-accent text-cv-dark hover:bg-cv-accent/90 disabled:opacity-50 transition-all">
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 disabled:opacity-50 transition-all">
                   {committing ? <Loader2 size={14} className="animate-spin" /> : null}
                   {committing ? 'Saving...' : 'Finish & Save'}
                 </button>

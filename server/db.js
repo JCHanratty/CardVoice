@@ -187,11 +187,40 @@ function openDb(dbPath) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
   }
 
+  // Migration: per-set sync toggle
+  const syncCols = [
+    'ALTER TABLE card_sets ADD COLUMN sync_enabled INTEGER DEFAULT 1',
+  ];
+  for (const sql of syncCols) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+  }
+
+  // Migration: per-insert-type pricing controls
+  const pricingCols = [
+    'ALTER TABLE set_insert_types ADD COLUMN pricing_enabled INTEGER DEFAULT 0',
+    "ALTER TABLE set_insert_types ADD COLUMN pricing_mode TEXT DEFAULT 'full_set'",
+    "ALTER TABLE set_insert_types ADD COLUMN search_query_override TEXT DEFAULT ''",
+  ];
+  for (const sql of pricingCols) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+  }
+
+  // Migration: link price data to insert types
+  const insertTypeFk = [
+    'ALTER TABLE price_history ADD COLUMN insert_type_id INTEGER REFERENCES set_insert_types(id) ON DELETE SET NULL',
+    'ALTER TABLE price_snapshots ADD COLUMN insert_type_id INTEGER REFERENCES set_insert_types(id) ON DELETE CASCADE',
+  ];
+  for (const sql of insertTypeFk) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+  }
+
   // Pricing indexes
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_card ON price_history(card_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_set ON price_history(set_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_snapshots_date ON price_snapshots(snapshot_date)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tracked_cards_card ON tracked_cards(card_id)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_insert_type ON price_history(insert_type_id)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_snapshots_insert_type ON price_snapshots(insert_type_id, snapshot_date)`); } catch(e) {}
 
   return db;
 }

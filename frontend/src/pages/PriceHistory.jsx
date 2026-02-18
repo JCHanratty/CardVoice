@@ -52,11 +52,11 @@ export default function PriceHistory() {
     else { setSortField(field); setSortDir('desc'); }
   };
 
-  const sortIcon = (field) => sortField === field ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const sortIcon = (field) => sortField === field ? (sortDir === 'asc' ? ' \u25B2' : ' \u25BC') : '';
 
   return (
     <div className="max-w-5xl mx-auto">
-      <h1 className="text-2xl font-bold text-cv-text mb-2">
+      <h1 className="text-2xl font-display font-bold text-cv-text mb-2">
         Price History {card && <>— #{card.card_number} {card.player}</>}
       </h1>
       {card && (
@@ -71,14 +71,14 @@ export default function PriceHistory() {
           <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={snapshots}>
-                <XAxis dataKey="snapshot_date" tick={{ fontSize: 10, fill: '#6b7280' }} />
-                <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} tickFormatter={v => `$${v}`} width={50} />
+                <XAxis dataKey="snapshot_date" tick={{ fontSize: 10, fill: '#78716C' }} />
+                <YAxis tick={{ fontSize: 10, fill: '#78716C' }} tickFormatter={v => `$${v}`} width={50} />
                 <Tooltip
-                  contentStyle={{ background: '#1a1f2e', border: '1px solid #374151', borderRadius: 8 }}
-                  labelStyle={{ color: '#9ca3af' }}
+                  contentStyle={{ background: '#1E1E22', border: '1px solid #2A2A2E', borderRadius: 8 }}
+                  labelStyle={{ color: '#78716C' }}
                   formatter={(val) => [`$${val.toFixed(2)}`, 'Median']}
                 />
-                <Area type="monotone" dataKey="median_price" stroke="#6366f1" fill="#6366f1" fillOpacity={0.15} strokeWidth={2} />
+                <Area type="monotone" dataKey="median_price" stroke="#8B2252" fill="#8B2252" fillOpacity={0.15} strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -117,15 +117,15 @@ export default function PriceHistory() {
             {filtered.map(ph => (
               <tr key={ph.id} className="border-b border-cv-border/30 hover:bg-white/[0.02]">
                 <td className="px-4 py-2 text-cv-text">{ph.sold_date || 'N/A'}</td>
-                <td className="px-4 py-2 text-right text-green-400 font-mono">${ph.price.toFixed(2)}</td>
-                <td className="px-4 py-2 text-cv-muted">{ph.condition || '—'}</td>
+                <td className="px-4 py-2 text-right text-cv-gold font-mono">${ph.price.toFixed(2)}</td>
+                <td className="px-4 py-2 text-cv-muted">{ph.condition || '\u2014'}</td>
                 <td className="px-4 py-2">
                   {ph.listing_url ? (
-                    <a href={ph.listing_url} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline truncate block max-w-xs">
+                    <a href={ph.listing_url} target="_blank" rel="noopener noreferrer" className="text-cv-gold hover:underline truncate block max-w-xs">
                       {ph.listing_title || 'View on eBay'}
                     </a>
                   ) : (
-                    <span className="text-cv-muted">{ph.listing_title || '—'}</span>
+                    <span className="text-cv-muted">{ph.listing_title || '\u2014'}</span>
                   )}
                 </td>
               </tr>

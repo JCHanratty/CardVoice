@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Trash2, Pencil, Check, X, Download, Search, Upload, Mic, ChevronUp, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Trash2, Pencil, Check, X, Download, Search, Upload, Mic, ChevronUp, ChevronDown, ToggleLeft, ToggleRight } from 'lucide-react';
 import axios from 'axios';
 import ChecklistWizardModal from '../components/ChecklistWizardModal';
+import EditSectionsModal from '../components/EditSectionsModal';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -23,6 +24,7 @@ export default function SetDetail() {
 
   // Checklist wizard state
   const [showChecklist, setShowChecklist] = useState(false);
+  const [showEditSections, setShowEditSections] = useState(false);
 
   // Set metadata (insert types + parallels from checklist import)
   const [metadata, setMetadata] = useState({ insertTypes: [], parallels: [] });
@@ -35,6 +37,10 @@ export default function SetDetail() {
   const [expandedCardId, setExpandedCardId] = useState(null);
   const [cardPriceHistory, setCardPriceHistory] = useState([]);
   const [cardSnapshots, setCardSnapshots] = useState([]);
+  const [valuation, setValuation] = useState(null);
+  const [editingInsertQuery, setEditingInsertQuery] = useState(null);
+  const [insertQueryText, setInsertQueryText] = useState('');
+  const [cardPrices, setCardPrices] = useState({});
 
   const loadSet = async () => {
     try {
@@ -58,9 +64,14 @@ export default function SetDetail() {
     } catch (_) {}
   };
 
+  const loadValuation = () => {
+    axios.get(`${API}/api/sets/${setId}/valuation`).then(r => setValuation(r.data)).catch(() => {});
+  };
+
   useEffect(() => {
     loadSet();
     loadMetadata();
+    loadValuation();
 
     axios.get(`${API}/api/tracked-cards`).then(r => {
       const map = {};
@@ -73,6 +84,10 @@ export default function SetDetail() {
     axios.get(`${API}/api/sets/${setId}/price-snapshots`).then(r => {
       setSetSnapshots(r.data);
       if (r.data.length > 0) setSetPrice(r.data[r.data.length - 1]);
+    }).catch(() => {});
+
+    axios.get(`${API}/api/sets/${setId}/card-prices`).then(r => {
+      setCardPrices(r.data);
     }).catch(() => {});
   }, [setId]);
 
@@ -163,6 +178,24 @@ export default function SetDetail() {
     } catch (err) {
       alert(err.response?.data?.detail || 'Update failed');
     }
+  };
+
+  const toggleInsertPricing = async (itId, enabled) => {
+    await axios.put(`${API}/api/insert-types/${itId}/pricing`, { pricing_enabled: enabled ? 1 : 0 });
+    loadMetadata();
+    loadValuation();
+  };
+
+  const switchInsertMode = async (itId, mode) => {
+    await axios.put(`${API}/api/insert-types/${itId}/pricing`, { pricing_mode: mode });
+    loadMetadata();
+    loadValuation();
+  };
+
+  const saveInsertQuery = async (itId) => {
+    await axios.put(`${API}/api/insert-types/${itId}/pricing`, { search_query_override: insertQueryText });
+    setEditingInsertQuery(null);
+    loadMetadata();
   };
 
   const hasMetadata = metadata.insertTypes.length > 0;
@@ -266,21 +299,27 @@ export default function SetDetail() {
             ) : (
               <div>
                 <div className="flex items-center gap-2">
-                  {setData.year && <span className="text-cv-yellow font-mono font-semibold text-sm">{setData.year}</span>}
-                  <h2 className="text-xl font-bold text-cv-text">{setData.name}</h2>
+                  {setData.year && <span className="text-cv-gold font-mono font-semibold text-sm">{setData.year}</span>}
+                  <h2 className="text-xl font-bold text-cv-text font-display">{setData.name}</h2>
                   {setData.brand && <span className="text-xs text-cv-muted bg-white/5 border border-cv-border/30 rounded px-1.5 py-0.5">{setData.brand}</span>}
                   <button onClick={startEditSet} className="p-1 rounded text-cv-muted hover:text-cv-accent hover:bg-cv-accent/10 transition-all" title="Edit set details"><Pencil size={13} /></button>
                 </div>
-                <div className="flex items-center gap-3 mt-1">
-                  <span className="text-xs text-cv-muted">
-                    <span className="text-cv-text font-mono font-bold">{totalCards}</span> cards
-                  </span>
-                  <span className="text-xs text-cv-muted">
-                    <span className="text-cv-accent font-mono font-bold">{haveCount}</span> owned
-                  </span>
-                  <span className="text-xs text-cv-muted">
-                    <span className="text-cv-yellow font-mono font-bold">{totalQty}</span> qty
-                  </span>
+                <div className="flex items-center gap-4 mt-1.5">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-cv-muted uppercase tracking-wider text-[10px]">Checklist</span>
+                    <span className="text-cv-text font-mono font-bold">{totalCards}</span>
+                  </div>
+                  <div className="w-px h-3 bg-cv-border/50" />
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-cv-muted uppercase tracking-wider text-[10px]">Owned</span>
+                    <span className="text-cv-accent font-mono font-bold">{haveCount}</span>
+                    <span className="text-cv-muted font-mono">/ {totalCards}</span>
+                  </div>
+                  <div className="w-px h-3 bg-cv-border/50" />
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-cv-muted uppercase tracking-wider text-[10px]">Total Copies</span>
+                    <span className="text-cv-gold font-mono font-bold">{totalQty}</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -290,6 +329,10 @@ export default function SetDetail() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cv-accent/10 text-cv-accent hover:bg-cv-accent/20 transition-all">
               <Mic size={12} /> Voice Entry
             </Link>
+            <button onClick={() => setShowEditSections(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-cv-border/50 text-cv-text hover:bg-white/10 transition-all">
+              <Pencil size={12} /> Edit Sections
+            </button>
             <button onClick={() => setShowChecklist(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cv-accent2/10 border border-cv-accent2/20 text-cv-accent2 hover:bg-cv-accent2/20 transition-all">
               <Upload size={12} /> Import Checklist
@@ -312,30 +355,116 @@ export default function SetDetail() {
         )}
       </div>
 
-      {/* Set Value Panel */}
-      {(setPrice || Object.keys(trackedCards).length > 0) && (
+      {/* Set Value Panel — Proportional Valuation */}
+      {(valuation || setPrice || Object.keys(trackedCards).length > 0) && (
         <div className="bg-cv-panel rounded-xl border border-cv-border/50 p-5 mb-4">
-          <h3 className="text-lg font-semibold text-cv-text mb-3">Estimated Value</h3>
+          <h3 className="text-lg font-semibold text-cv-text mb-3 font-display">Estimated Value</h3>
           <div className="flex items-end gap-8">
             <div>
-              <div className="text-3xl font-bold text-green-400 font-mono">
-                {setPrice ? `$${setPrice.median_price.toFixed(2)}` : 'No data yet'}
+              <div className="text-3xl font-bold text-cv-gold font-mono">
+                {valuation ? `$${valuation.totalValue.toFixed(2)}` : setPrice ? `$${setPrice.median_price.toFixed(2)}` : 'No data yet'}
               </div>
               <div className="text-xs text-cv-muted mt-1">
-                {setPrice ? `Set value as of ${setPrice.snapshot_date}` : 'Sync to get pricing'}
+                {valuation && valuation.totalValue > 0 ? 'Proportional value based on ownership' : 'Sync to get pricing'}
               </div>
             </div>
             {setSnapshots.length > 1 && (
               <div className="w-48 h-12">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={setSnapshots}>
-                    <Area type="monotone" dataKey="median_price" stroke="#00d4aa" fill="#00d4aa" fillOpacity={0.15} strokeWidth={2} dot={false} />
+                    <Area type="monotone" dataKey="median_price" stroke="#D4A847" fill="#D4A847" fillOpacity={0.15} strokeWidth={2} dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
             )}
           </div>
 
+          {/* Per-Insert-Type Breakdown */}
+          {valuation && valuation.insertTypes.length > 0 && (
+            <div className="mt-4 border-t border-cv-border/50 pt-3">
+              <h4 className="text-sm font-medium text-cv-muted mb-2">Insert Type Breakdown</h4>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-cv-muted border-b border-cv-border/30 text-xs uppercase tracking-wider">
+                    <th className="text-left py-1.5">Type</th>
+                    <th className="text-center py-1.5">Owned/Total</th>
+                    <th className="text-center py-1.5">Status</th>
+                    <th className="text-center py-1.5">Mode</th>
+                    <th className="text-center py-1.5">Enabled</th>
+                    <th className="text-right py-1.5">Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {valuation.insertTypes.map(it => (
+                    <tr key={it.id || it.name} className="border-b border-cv-border/20">
+                      <td className="py-2 text-cv-text font-medium">
+                        <div>{it.name}</div>
+                        {it.id && editingInsertQuery === it.id ? (
+                          <div className="flex items-center gap-1 mt-1">
+                            <input
+                              value={insertQueryText}
+                              onChange={e => setInsertQueryText(e.target.value)}
+                              className="flex-1 bg-cv-dark border border-cv-border/50 rounded px-2 py-0.5 text-xs text-cv-text"
+                              placeholder="Custom search query..."
+                            />
+                            <button onClick={() => saveInsertQuery(it.id)} className="text-xs bg-cv-accent/20 text-cv-accent px-1.5 py-0.5 rounded">Save</button>
+                            <button onClick={() => setEditingInsertQuery(null)} className="text-xs text-cv-muted">Cancel</button>
+                          </div>
+                        ) : it.id ? (
+                          <button
+                            onClick={() => { setEditingInsertQuery(it.id); setInsertQueryText(metadata.insertTypes.find(m => m.id === it.id)?.search_query_override || ''); }}
+                            className="text-[10px] text-cv-gold hover:text-cv-gold/80"
+                          >Edit query</button>
+                        ) : null}
+                      </td>
+                      <td className="py-2 text-center text-cv-text font-mono text-xs">
+                        {it.ownedCount}/{it.cardCount}
+                        {it.totalQtyOwned > it.ownedCount && <span className="text-cv-muted ml-1">({it.totalQtyOwned} qty)</span>}
+                      </td>
+                      <td className="py-2 text-center">
+                        {it.isComplete ? (
+                          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-cv-accent/15 text-cv-accent border border-cv-accent/20 font-semibold">COMPLETE</span>
+                        ) : (
+                          <span className="text-xs text-cv-muted">{it.cardCount > 0 ? Math.round((it.ownedCount / it.cardCount) * 100) : 0}%</span>
+                        )}
+                      </td>
+                      <td className="py-2 text-center">
+                        {it.id ? (
+                          <select
+                            value={it.pricingMode}
+                            onChange={e => switchInsertMode(it.id, e.target.value)}
+                            className="bg-cv-dark border border-cv-border/50 rounded px-1.5 py-0.5 text-xs text-cv-text"
+                          >
+                            <option value="full_set">Full Set</option>
+                            <option value="per_card">Per Card</option>
+                          </select>
+                        ) : (
+                          <span className="text-xs text-cv-muted">Full Set</span>
+                        )}
+                      </td>
+                      <td className="py-2 text-center">
+                        {it.id ? (
+                          <button onClick={() => toggleInsertPricing(it.id, !it.pricingEnabled)}>
+                            {it.pricingEnabled
+                              ? <ToggleRight className="text-cv-accent" size={20} />
+                              : <ToggleLeft className="text-cv-muted" size={20} />
+                            }
+                          </button>
+                        ) : (
+                          <span className="text-xs text-cv-muted">Auto</span>
+                        )}
+                      </td>
+                      <td className="py-2 text-right text-cv-gold font-mono text-sm">
+                        {it.value > 0 ? `$${it.value.toFixed(2)}` : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Tracked Cards */}
           {Object.keys(trackedCards).length > 0 && (
             <div className="mt-4 border-t border-cv-border/50 pt-3">
               <h4 className="text-sm font-medium text-cv-muted mb-2">Tracked Cards</h4>
@@ -346,7 +475,7 @@ export default function SetDetail() {
                     className="flex justify-between items-center py-1 text-sm cursor-pointer hover:bg-white/[0.03] rounded px-2"
                   >
                     <span className="text-cv-text">#{tc.card_number} {tc.player} {expandedCardId === tc.card_id ? '\u25BE' : '\u25B8'}</span>
-                    <span className="text-green-400 font-mono">
+                    <span className="text-cv-gold font-mono">
                       {tc.median_price != null ? `$${tc.median_price.toFixed(2)}` : 'No data'}
                     </span>
                   </div>
@@ -357,7 +486,7 @@ export default function SetDetail() {
                         <div className="h-24 mb-3">
                           <ResponsiveContainer width="100%" height="100%">
                             <AreaChart data={cardSnapshots}>
-                              <Area type="monotone" dataKey="median_price" stroke="#6366f1" fill="#6366f1" fillOpacity={0.15} strokeWidth={2} dot={false} />
+                              <Area type="monotone" dataKey="median_price" stroke="#8B2252" fill="#8B2252" fillOpacity={0.15} strokeWidth={2} dot={false} />
                             </AreaChart>
                           </ResponsiveContainer>
                         </div>
@@ -375,11 +504,11 @@ export default function SetDetail() {
                           {cardPriceHistory.slice(0, 20).map(ph => (
                             <tr key={ph.id} className="border-b border-cv-border/20">
                               <td className="py-1 text-cv-muted">{ph.sold_date || 'N/A'}</td>
-                              <td className="py-1 text-right text-green-400 font-mono">${ph.price.toFixed(2)}</td>
+                              <td className="py-1 text-right text-cv-gold font-mono">${ph.price.toFixed(2)}</td>
                               <td className="py-1 pl-3 text-cv-muted">{ph.condition || '\u2014'}</td>
                               <td className="py-1 pl-3">
                                 {ph.listing_url ? (
-                                  <a href={ph.listing_url} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline truncate block max-w-[200px]">
+                                  <a href={ph.listing_url} target="_blank" rel="noopener noreferrer" className="text-cv-gold hover:underline truncate block max-w-[200px]">
                                     {ph.listing_title || 'View'}
                                   </a>
                                 ) : '\u2014'}
@@ -391,7 +520,7 @@ export default function SetDetail() {
                       {cardPriceHistory.length === 0 && (
                         <div className="text-cv-muted text-center py-2">No price data yet. Run a sync to fetch prices.</div>
                       )}
-                      <Link to={`/cards/${tc.card_id}/prices`} className="text-xs text-cyan-400 hover:underline mt-2 inline-block">
+                      <Link to={`/cards/${tc.card_id}/prices`} className="text-xs text-cv-gold hover:underline mt-2 inline-block">
                         View Full Price History &rarr;
                       </Link>
                     </div>
@@ -417,7 +546,7 @@ export default function SetDetail() {
               className={`px-3 py-2 rounded-lg text-xs font-medium capitalize transition-all ${
                 filter === f
                   ? f === 'have' ? 'bg-cv-accent/15 text-cv-accent border border-cv-accent/25'
-                  : f === 'need' ? 'bg-cv-yellow/15 text-cv-yellow border border-cv-yellow/25'
+                  : f === 'need' ? 'bg-cv-gold/15 text-cv-gold border border-cv-gold/25'
                   : 'bg-cv-accent2/15 text-cv-accent2 border border-cv-accent2/25'
                   : 'bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10'
               }`}>
@@ -462,10 +591,12 @@ export default function SetDetail() {
       {filtered.length > 0 && (
         <div className="bg-cv-panel rounded-xl border border-cv-border/50 p-3 mb-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-cv-muted uppercase tracking-wider font-semibold">Totals</span>
-            <span className="text-sm text-cv-text font-bold">
-              {filtered.length} cards · {filtered.filter(c => c.qty > 0).length} owned · <span className="text-cv-accent">{filtered.reduce((s, c) => s + (c.qty || 0), 0)} total qty</span>
-            </span>
+            <span className="text-xs text-cv-muted uppercase tracking-wider font-semibold">Filtered View</span>
+            <div className="flex items-center gap-4 text-sm">
+              <span className="text-cv-muted text-xs">Checklist <span className="text-cv-text font-mono font-bold">{filtered.length}</span></span>
+              <span className="text-cv-muted text-xs">Owned <span className="text-cv-accent font-mono font-bold">{filtered.filter(c => c.qty > 0).length}</span><span className="text-cv-muted font-mono">/{filtered.length}</span></span>
+              <span className="text-cv-muted text-xs">Copies <span className="text-cv-gold font-mono font-bold">{filtered.reduce((s, c) => s + (c.qty || 0), 0)}</span></span>
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             {Object.entries(groupStats).map(([key, stats]) => {
@@ -473,12 +604,13 @@ export default function SetDetail() {
               return (
                 <div key={key} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-cv-dark/50 border border-cv-border/30 text-xs">
                   <span className="text-cv-accent font-semibold">{insertType}</span>
-                  {parallel && <><span className="text-cv-muted">/</span><span className="text-cv-yellow">{parallel}</span></>}
+                  {parallel && <><span className="text-cv-muted">/</span><span className="text-cv-gold">{parallel}</span></>}
                   {!parallel && <span className="text-cv-muted">-- base</span>}
                   <span className="text-cv-muted">·</span>
-                  <span className="text-cv-text">{stats.cards} cards</span>
+                  <span className="text-cv-text">{stats.have}<span className="text-cv-muted">/{stats.cards}</span> owned</span>
                   <span className="text-cv-muted">·</span>
-                  <span className="text-cv-accent font-mono font-bold">{stats.qty} qty</span>
+                  <span className="text-cv-gold font-mono font-bold">{stats.qty}</span>
+                  <span className="text-cv-muted">copies</span>
                 </div>
               );
             })}
@@ -518,7 +650,7 @@ export default function SetDetail() {
                 <tr key={`grp-${idx}`} className="bg-cv-accent/[0.03]">
                   <td colSpan="10" className="px-3 py-1.5 text-xs font-semibold">
                     <span className="text-cv-accent">{card.insert_type || 'Base'}</span>
-                    {card.parallel && <><span className="text-cv-muted mx-1.5">/</span><span className="text-cv-yellow">{card.parallel}</span></>}
+                    {card.parallel && <><span className="text-cv-muted mx-1.5">/</span><span className="text-cv-gold">{card.parallel}</span></>}
                     {!card.parallel && <span className="text-cv-muted ml-1.5">-- base</span>}
                   </td>
                 </tr>
@@ -526,11 +658,11 @@ export default function SetDetail() {
               const groupFooter = lastInGroup ? (
                 <tr key={`sub-${idx}`} className="bg-cv-dark/30 border-b-2 border-cv-border/50">
                   <td colSpan="5" className="px-3 py-1.5 text-xs text-cv-muted text-right font-semibold">
-                    Subtotal: {stats.cards} cards · {stats.have} owned
+                    Owned {stats.have}/{stats.cards}
                   </td>
                   <td className="px-3 py-1.5 text-xs text-cv-accent font-mono">{card.insert_type || 'Base'}</td>
-                  <td className="px-3 py-1.5 text-xs text-cv-yellow font-mono">{card.parallel || '--'}</td>
-                  <td className="px-3 py-1.5 text-xs text-cv-accent font-mono text-center font-bold">{stats.qty}</td>
+                  <td className="px-3 py-1.5 text-xs text-cv-gold font-mono">{card.parallel || '--'}</td>
+                  <td className="px-3 py-1.5 text-xs text-cv-gold font-mono text-center font-bold" title="Total copies">{stats.qty}</td>
                   <td></td>
                   <td></td>
                 </tr>
@@ -582,7 +714,7 @@ export default function SetDetail() {
                     <td className="px-2 py-2 text-center">
                       <button
                         onClick={() => toggleTrack(card.id)}
-                        className={`hover:scale-110 transition-transform ${trackedCards[card.id] ? 'text-yellow-400' : 'text-gray-600'}`}
+                        className={`hover:scale-110 transition-transform ${trackedCards[card.id] ? 'text-cv-gold' : 'text-cv-muted/40'}`}
                         title={trackedCards[card.id] ? 'Stop tracking price' : 'Track price on eBay'}
                       >
                         {trackedCards[card.id] ? '\u2605' : '\u2606'}
@@ -593,13 +725,13 @@ export default function SetDetail() {
                     <td className="px-3 py-2 text-cv-muted">{card.team || '-'}</td>
                     <td className="px-3 py-2">
                       {card.rc_sp ? (
-                        <span className="inline-block px-1.5 py-0.5 rounded text-xs bg-cv-yellow/10 text-cv-yellow border border-cv-yellow/20">{card.rc_sp}</span>
+                        <span className="inline-block px-1.5 py-0.5 rounded text-xs bg-cv-gold/10 text-cv-gold border border-cv-gold/20">{card.rc_sp}</span>
                       ) : <span className="text-cv-muted">-</span>}
                     </td>
                     <td className="px-3 py-2 text-cv-text">{card.insert_type || '-'}</td>
                     <td className="px-3 py-2">
                       {card.parallel ? (
-                        <span className="text-cv-yellow">{card.parallel}</span>
+                        <span className="text-cv-gold">{card.parallel}</span>
                       ) : <span className="text-cv-muted">-</span>}
                     </td>
                     <td className="px-3 py-2">
@@ -626,7 +758,9 @@ export default function SetDetail() {
                     </td>
                     <td className="px-3 py-2 text-right text-sm">
                       {trackedCards[card.id]?.median_price != null ? (
-                        <span className="text-green-400 font-mono">${trackedCards[card.id].median_price.toFixed(2)}</span>
+                        <span className="text-cv-gold font-mono">${trackedCards[card.id].median_price.toFixed(2)}</span>
+                      ) : cardPrices[card.id]?.median_price != null ? (
+                        <span className="text-cv-gold/70 font-mono">${cardPrices[card.id].median_price.toFixed(2)}</span>
                       ) : trackedCards[card.id] ? (
                         <span className="text-cv-muted text-xs">No data</span>
                       ) : null}
@@ -649,10 +783,10 @@ export default function SetDetail() {
             <tfoot>
               <tr className="bg-cv-dark/50 border-t-2 border-cv-accent/20">
                 <td colSpan="5" className="px-3 py-2.5 text-sm text-cv-text font-bold text-right">
-                  Total: {filtered.length} cards · {filtered.filter(c => c.qty > 0).length} owned · {Object.keys(groupStats).length} group{Object.keys(groupStats).length !== 1 ? 's' : ''}
+                  Owned <span className="text-cv-accent">{filtered.filter(c => c.qty > 0).length}</span>/{filtered.length} · {Object.keys(groupStats).length} group{Object.keys(groupStats).length !== 1 ? 's' : ''}
                 </td>
                 <td colSpan="2" className="px-3 py-2.5"></td>
-                <td className="px-3 py-2.5 text-center text-sm text-cv-accent font-mono font-bold">
+                <td className="px-3 py-2.5 text-center text-sm text-cv-gold font-mono font-bold" title="Total copies">
                   {filtered.reduce((s, c) => s + (c.qty || 0), 0)}
                 </td>
                 <td></td>
@@ -673,6 +807,14 @@ export default function SetDetail() {
         setId={Number(setId)}
         setName={setData?.name}
         onComplete={() => { setShowChecklist(false); loadSet(); loadMetadata(); }}
+      />
+
+      {/* Edit Sections Modal */}
+      <EditSectionsModal
+        open={showEditSections}
+        onOpenChange={setShowEditSections}
+        setId={Number(setId)}
+        onUpdate={() => { loadMetadata(); loadSet(); loadValuation(); }}
       />
     </div>
   );

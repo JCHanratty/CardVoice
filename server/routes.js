@@ -105,8 +105,36 @@ function createRoutes(db) {
     const cardSet = db.prepare('SELECT id FROM card_sets WHERE id = ?').get(setId);
     if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
 
-    // foreign_keys ON + ON DELETE CASCADE handles cards
-    db.prepare('DELETE FROM card_sets WHERE id = ?').run(setId);
+    // Explicitly delete all dependent rows to avoid FK constraint issues
+    const deleteAll = db.transaction(() => {
+      // Get card IDs and insert type IDs for this set
+      const cardIds = db.prepare('SELECT id FROM cards WHERE set_id = ?').all(setId).map(r => r.id);
+      const itIds = db.prepare('SELECT id FROM set_insert_types WHERE set_id = ?').all(setId).map(r => r.id);
+
+      // Delete price_snapshots referencing cards, insert_types, or set directly
+      if (cardIds.length > 0) {
+        for (const cid of cardIds) {
+          db.prepare('DELETE FROM price_snapshots WHERE card_id = ?').run(cid);
+          db.prepare('DELETE FROM price_history WHERE card_id = ?').run(cid);
+          db.prepare('DELETE FROM tracked_cards WHERE card_id = ?').run(cid);
+        }
+      }
+      if (itIds.length > 0) {
+        for (const itid of itIds) {
+          db.prepare('DELETE FROM price_snapshots WHERE insert_type_id = ?').run(itid);
+          db.prepare('DELETE FROM price_history WHERE insert_type_id = ?').run(itid);
+        }
+      }
+      db.prepare('DELETE FROM price_snapshots WHERE set_id = ?').run(setId);
+      db.prepare('DELETE FROM price_history WHERE set_id = ?').run(setId);
+      db.prepare('DELETE FROM voice_sessions WHERE set_id = ?').run(setId);
+      db.prepare('DELETE FROM set_insert_types WHERE set_id = ?').run(setId);
+      db.prepare('DELETE FROM set_parallels WHERE set_id = ?').run(setId);
+      db.prepare('DELETE FROM cards WHERE set_id = ?').run(setId);
+      db.prepare('DELETE FROM card_sets WHERE id = ?').run(setId);
+    });
+
+    deleteAll();
     res.json({ deleted: true });
   });
 
@@ -507,15 +535,32 @@ function createRoutes(db) {
     });
   });
 
-  // GET /api/sets/:id/metadata — get set's available insert types + parallels
+  // GET /api/sets/:id/metadata — get set's available insert types + parallels (with pricing fields)
   router.get('/api/sets/:id/metadata', (req, res) => {
     const setId = Number(req.params.id);
     const cardSet = db.prepare('SELECT id FROM card_sets WHERE id = ?').get(setId);
     if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
 
     const insertTypes = db.prepare(
-      'SELECT id, name, card_count, odds, section_type FROM set_insert_types WHERE set_id = ? ORDER BY id'
+      'SELECT id, name, card_count, odds, section_type, pricing_enabled, pricing_mode, search_query_override FROM set_insert_types WHERE set_id = ? ORDER BY id'
     ).all(setId);
+
+    // Enrich with owned counts per insert type
+    const ownedByType = db.prepare(
+      `SELECT COALESCE(insert_type, 'Base') as insert_type,
+              COUNT(*) as owned_count,
+              SUM(qty) as total_qty
+       FROM cards WHERE set_id = ? AND qty > 0
+       GROUP BY COALESCE(insert_type, 'Base')`
+    ).all(setId);
+    const ownedMap = {};
+    ownedByType.forEach(r => { ownedMap[r.insert_type] = { owned_count: r.owned_count, total_qty: r.total_qty }; });
+
+    insertTypes.forEach(it => {
+      const owned = ownedMap[it.name] || { owned_count: 0, total_qty: 0 };
+      it.owned_count = owned.owned_count;
+      it.total_qty = owned.total_qty;
+    });
 
     const parallels = db.prepare(
       'SELECT id, name, print_run, exclusive, notes, serial_max, channels, variation_type FROM set_parallels WHERE set_id = ? ORDER BY id'
@@ -585,7 +630,7 @@ function createRoutes(db) {
 
     try {
       const migrate = db.transaction(() => {
-        // --- Step 1: Clean up old BaseballBinder-migrated sets (0 owned cards) ---
+        // --- Step 1: Clean up old JCHanratty-migrated sets (0 owned cards) ---
         const allSets = db.prepare('SELECT id, name FROM card_sets').all();
         for (const s of allSets) {
           const ownedCount = db.prepare(
@@ -938,11 +983,19 @@ function createRoutes(db) {
     res.json(rows);
   });
 
-  // Get price snapshots for a set over time
+  // Get price snapshots for a set over time (with optional insert_type_id filter)
   router.get('/api/sets/:id/price-snapshots', (req, res) => {
-    const rows = db.prepare(`
-      SELECT * FROM price_snapshots WHERE set_id = ? AND card_id IS NULL ORDER BY snapshot_date ASC
-    `).all(req.params.id);
+    const insertTypeId = req.query.insert_type_id ? Number(req.query.insert_type_id) : null;
+    let rows;
+    if (insertTypeId) {
+      rows = db.prepare(`
+        SELECT * FROM price_snapshots WHERE set_id = ? AND card_id IS NULL AND insert_type_id = ? ORDER BY snapshot_date ASC
+      `).all(req.params.id, insertTypeId);
+    } else {
+      rows = db.prepare(`
+        SELECT * FROM price_snapshots WHERE set_id = ? AND card_id IS NULL AND insert_type_id IS NULL ORDER BY snapshot_date ASC
+      `).all(req.params.id);
+    }
     res.json(rows);
   });
 
@@ -954,27 +1007,530 @@ function createRoutes(db) {
     res.json(rows);
   });
 
-  // Portfolio summary
-  router.get('/api/portfolio', (req, res) => {
-    const setValues = db.prepare(`
-      SELECT cs.id, cs.name, cs.year, ps.median_price, ps.snapshot_date
-      FROM card_sets cs
-      LEFT JOIN price_snapshots ps ON ps.set_id = cs.id AND ps.card_id IS NULL
-        AND ps.snapshot_date = (SELECT MAX(snapshot_date) FROM price_snapshots WHERE set_id = cs.id AND card_id IS NULL)
-      ORDER BY ps.median_price DESC NULLS LAST
-    `).all();
+  // GET /api/sets/:id/card-prices — get latest per-card prices (from insert-type per-card pricing)
+  router.get('/api/sets/:id/card-prices', (req, res) => {
+    const setId = Number(req.params.id);
 
-    const cardValues = db.prepare(`
+    // Get per-card prices from insert-type per-card syncs
+    const rows = db.prepare(`
+      SELECT ps.card_id, ps.median_price, ps.snapshot_date, ps.insert_type_id
+      FROM price_snapshots ps
+      WHERE ps.card_id IN (SELECT id FROM cards WHERE set_id = ?)
+        AND ps.insert_type_id IS NOT NULL
+        AND ps.snapshot_date = (
+          SELECT MAX(ps2.snapshot_date) FROM price_snapshots ps2
+          WHERE ps2.card_id = ps.card_id AND ps2.insert_type_id = ps.insert_type_id
+        )
+    `).all(setId);
+
+    // Also get tracked card (starred) prices
+    const tracked = db.prepare(`
+      SELECT ps.card_id, ps.median_price, ps.snapshot_date
+      FROM price_snapshots ps
+      WHERE ps.card_id IN (SELECT card_id FROM tracked_cards WHERE card_id IN (SELECT id FROM cards WHERE set_id = ?))
+        AND ps.insert_type_id IS NULL
+        AND ps.set_id IS NULL
+        AND ps.snapshot_date = (
+          SELECT MAX(ps2.snapshot_date) FROM price_snapshots ps2
+          WHERE ps2.card_id = ps.card_id AND ps2.insert_type_id IS NULL AND ps2.set_id IS NULL
+        )
+    `).all(setId);
+
+    // Merge: prefer tracked card price, fall back to insert-type per-card price
+    const priceMap = {};
+    for (const r of rows) {
+      priceMap[r.card_id] = { median_price: r.median_price, snapshot_date: r.snapshot_date, source: 'insert_type' };
+    }
+    for (const r of tracked) {
+      priceMap[r.card_id] = { median_price: r.median_price, snapshot_date: r.snapshot_date, source: 'tracked' };
+    }
+
+    res.json(priceMap);
+  });
+
+  // PUT /api/sets/:id/sync-settings — toggle sync_enabled per set
+  router.put('/api/sets/:id/sync-settings', (req, res) => {
+    const setId = Number(req.params.id);
+    const cardSet = db.prepare('SELECT * FROM card_sets WHERE id = ?').get(setId);
+    if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
+
+    const { sync_enabled } = req.body;
+    if (typeof sync_enabled === 'number' || typeof sync_enabled === 'boolean') {
+      db.prepare('UPDATE card_sets SET sync_enabled = ? WHERE id = ?').run(sync_enabled ? 1 : 0, setId);
+    }
+    const updated = db.prepare('SELECT * FROM card_sets WHERE id = ?').get(setId);
+    res.json({ id: updated.id, name: updated.name, sync_enabled: updated.sync_enabled });
+  });
+
+  // PUT /api/insert-types/:id/pricing — set pricing_enabled, pricing_mode, search_query_override
+  router.put('/api/insert-types/:id/pricing', (req, res) => {
+    const itId = Number(req.params.id);
+    const it = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(itId);
+    if (!it) return res.status(404).json({ detail: 'Insert type not found' });
+
+    const { pricing_enabled, pricing_mode, search_query_override } = req.body;
+    if (pricing_enabled !== undefined) {
+      db.prepare('UPDATE set_insert_types SET pricing_enabled = ? WHERE id = ?').run(pricing_enabled ? 1 : 0, itId);
+    }
+    if (pricing_mode !== undefined && ['full_set', 'per_card'].includes(pricing_mode)) {
+      db.prepare('UPDATE set_insert_types SET pricing_mode = ? WHERE id = ?').run(pricing_mode, itId);
+    }
+    if (search_query_override !== undefined) {
+      db.prepare('UPDATE set_insert_types SET search_query_override = ? WHERE id = ?').run(search_query_override, itId);
+    }
+    const updated = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(itId);
+    res.json(updated);
+  });
+
+  // ============================================================
+  // Insert Type & Parallel CRUD
+  // ============================================================
+
+  // POST /api/sets/:id/insert-types — add new insert type
+  router.post('/api/sets/:id/insert-types', (req, res) => {
+    const setId = Number(req.params.id);
+    const cardSet = db.prepare('SELECT id FROM card_sets WHERE id = ?').get(setId);
+    if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
+
+    const { name, card_count, odds, section_type } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ detail: 'name is required' });
+
+    const existing = db.prepare('SELECT id FROM set_insert_types WHERE set_id = ? AND name = ?').get(setId, name.trim());
+    if (existing) return res.status(400).json({ detail: 'Insert type already exists for this set' });
+
+    const info = db.prepare(
+      'INSERT INTO set_insert_types (set_id, name, card_count, odds, section_type) VALUES (?, ?, ?, ?, ?)'
+    ).run(setId, name.trim(), card_count || 0, odds || '', section_type || 'base');
+
+    const row = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(info.lastInsertRowid);
+    res.json(row);
+  });
+
+  // PUT /api/insert-types/:id — edit insert type metadata
+  router.put('/api/insert-types/:id', (req, res) => {
+    const itId = Number(req.params.id);
+    const it = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(itId);
+    if (!it) return res.status(404).json({ detail: 'Insert type not found' });
+
+    const { name, card_count, odds, section_type } = req.body;
+    const oldName = it.name;
+
+    if (name !== undefined && name.trim()) {
+      const newName = name.trim();
+      // Check uniqueness if name is changing
+      if (newName !== oldName) {
+        const dup = db.prepare('SELECT id FROM set_insert_types WHERE set_id = ? AND name = ? AND id != ?').get(it.set_id, newName, itId);
+        if (dup) return res.status(400).json({ detail: 'An insert type with that name already exists' });
+      }
+      db.prepare('UPDATE set_insert_types SET name = ? WHERE id = ?').run(newName, itId);
+      // Update card references
+      if (newName !== oldName) {
+        db.prepare('UPDATE cards SET insert_type = ? WHERE set_id = ? AND insert_type = ?').run(newName, it.set_id, oldName);
+      }
+    }
+    if (card_count !== undefined) db.prepare('UPDATE set_insert_types SET card_count = ? WHERE id = ?').run(card_count, itId);
+    if (odds !== undefined) db.prepare('UPDATE set_insert_types SET odds = ? WHERE id = ?').run(odds, itId);
+    if (section_type !== undefined) db.prepare('UPDATE set_insert_types SET section_type = ? WHERE id = ?').run(section_type, itId);
+
+    const updated = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(itId);
+    res.json(updated);
+  });
+
+  // DELETE /api/insert-types/:id — delete insert type
+  router.delete('/api/insert-types/:id', (req, res) => {
+    const itId = Number(req.params.id);
+    const it = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(itId);
+    if (!it) return res.status(404).json({ detail: 'Insert type not found' });
+
+    // Clean up pricing data referencing this insert type
+    db.prepare('DELETE FROM price_snapshots WHERE insert_type_id = ?').run(itId);
+    db.prepare('DELETE FROM price_history WHERE insert_type_id = ?').run(itId);
+    db.prepare('DELETE FROM set_insert_types WHERE id = ?').run(itId);
+    res.json({ deleted: true });
+  });
+
+  // POST /api/sets/:id/parallels — add new parallel
+  router.post('/api/sets/:id/parallels', (req, res) => {
+    const setId = Number(req.params.id);
+    const cardSet = db.prepare('SELECT id FROM card_sets WHERE id = ?').get(setId);
+    if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
+
+    const { name, print_run, exclusive, notes, serial_max, channels, variation_type } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ detail: 'name is required' });
+
+    const existing = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ?').get(setId, name.trim());
+    if (existing) return res.status(400).json({ detail: 'Parallel already exists for this set' });
+
+    const info = db.prepare(
+      'INSERT INTO set_parallels (set_id, name, print_run, exclusive, notes, serial_max, channels, variation_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(setId, name.trim(), print_run || null, exclusive || '', notes || '', serial_max || null, channels || '', variation_type || 'parallel');
+
+    const row = db.prepare('SELECT * FROM set_parallels WHERE id = ?').get(info.lastInsertRowid);
+    res.json(row);
+  });
+
+  // PUT /api/set-parallels/:id — edit parallel metadata
+  router.put('/api/set-parallels/:id', (req, res) => {
+    const pId = Number(req.params.id);
+    const p = db.prepare('SELECT * FROM set_parallels WHERE id = ?').get(pId);
+    if (!p) return res.status(404).json({ detail: 'Parallel not found' });
+
+    const { name, print_run, exclusive, notes, serial_max, channels, variation_type } = req.body;
+    const oldName = p.name;
+
+    if (name !== undefined && name.trim()) {
+      const newName = name.trim();
+      if (newName !== oldName) {
+        const dup = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ? AND id != ?').get(p.set_id, newName, pId);
+        if (dup) return res.status(400).json({ detail: 'A parallel with that name already exists' });
+      }
+      db.prepare('UPDATE set_parallels SET name = ? WHERE id = ?').run(newName, pId);
+      if (newName !== oldName) {
+        db.prepare('UPDATE cards SET parallel = ? WHERE set_id = ? AND parallel = ?').run(newName, p.set_id, oldName);
+      }
+    }
+    if (print_run !== undefined) db.prepare('UPDATE set_parallels SET print_run = ? WHERE id = ?').run(print_run, pId);
+    if (exclusive !== undefined) db.prepare('UPDATE set_parallels SET exclusive = ? WHERE id = ?').run(exclusive, pId);
+    if (notes !== undefined) db.prepare('UPDATE set_parallels SET notes = ? WHERE id = ?').run(notes, pId);
+    if (serial_max !== undefined) db.prepare('UPDATE set_parallels SET serial_max = ? WHERE id = ?').run(serial_max, pId);
+    if (channels !== undefined) db.prepare('UPDATE set_parallels SET channels = ? WHERE id = ?').run(channels, pId);
+    if (variation_type !== undefined) db.prepare('UPDATE set_parallels SET variation_type = ? WHERE id = ?').run(variation_type, pId);
+
+    const updated = db.prepare('SELECT * FROM set_parallels WHERE id = ?').get(pId);
+    res.json(updated);
+  });
+
+  // DELETE /api/set-parallels/:id — delete parallel
+  router.delete('/api/set-parallels/:id', (req, res) => {
+    const pId = Number(req.params.id);
+    const p = db.prepare('SELECT * FROM set_parallels WHERE id = ?').get(pId);
+    if (!p) return res.status(404).json({ detail: 'Parallel not found' });
+
+    db.prepare('DELETE FROM set_parallels WHERE id = ?').run(pId);
+    res.json({ deleted: true });
+  });
+
+  // GET /api/sets/:id/valuation — proportional valuation endpoint
+  router.get('/api/sets/:id/valuation', (req, res) => {
+    const setId = Number(req.params.id);
+    const cardSet = db.prepare('SELECT * FROM card_sets WHERE id = ?').get(setId);
+    if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
+
+    const insertTypes = db.prepare('SELECT * FROM set_insert_types WHERE set_id = ?').all(setId);
+    const hasMetadata = insertTypes.length > 0;
+
+    const result = { totalValue: 0, insertTypes: [] };
+
+    // Helper: get latest snapshot for a tracked card
+    const getCardSnapshot = (cardId) => {
+      return db.prepare(`
+        SELECT median_price FROM price_snapshots
+        WHERE card_id = ? AND insert_type_id IS NULL
+        ORDER BY snapshot_date DESC LIMIT 1
+      `).get(cardId);
+    };
+
+    if (hasMetadata) {
+      for (const it of insertTypes) {
+        const totalCards = it.card_count || db.prepare(
+          'SELECT COUNT(*) as cnt FROM cards WHERE set_id = ? AND insert_type = ?'
+        ).get(setId, it.name).cnt;
+
+        const ownedCards = db.prepare(
+          'SELECT COUNT(*) as cnt FROM cards WHERE set_id = ? AND insert_type = ? AND qty > 0'
+        ).get(setId, it.name).cnt;
+
+        const totalQtyOwned = db.prepare(
+          'SELECT COALESCE(SUM(qty), 0) as total FROM cards WHERE set_id = ? AND insert_type = ? AND qty > 0'
+        ).get(setId, it.name).total;
+
+        const isComplete = ownedCards >= totalCards && totalCards > 0;
+
+        let value = 0;
+
+        if (it.pricing_enabled) {
+          if (it.pricing_mode === 'full_set') {
+            // Get latest insert type snapshot
+            const snap = db.prepare(`
+              SELECT median_price FROM price_snapshots
+              WHERE insert_type_id = ? AND card_id IS NULL
+              ORDER BY snapshot_date DESC LIMIT 1
+            `).get(it.id);
+
+            if (snap && totalCards > 0) {
+              const perCardAvg = snap.median_price / totalCards;
+
+              // Sum value for each owned card, respecting qty and starred overrides
+              const ownedList = db.prepare(
+                'SELECT id, qty FROM cards WHERE set_id = ? AND insert_type = ? AND qty > 0'
+              ).all(setId, it.name);
+
+              for (const card of ownedList) {
+                // Check if card is starred (tracked) — use individual price if available
+                const tracked = db.prepare('SELECT card_id FROM tracked_cards WHERE card_id = ?').get(card.id);
+                if (tracked) {
+                  const cardSnap = getCardSnapshot(card.id);
+                  if (cardSnap) {
+                    value += cardSnap.median_price * card.qty;
+                    continue;
+                  }
+                }
+                value += perCardAvg * card.qty;
+              }
+            }
+          } else if (it.pricing_mode === 'per_card') {
+            // Sum actual per-card snapshot medians * qty
+            const ownedList = db.prepare(
+              'SELECT id, qty FROM cards WHERE set_id = ? AND insert_type = ? AND qty > 0'
+            ).all(setId, it.name);
+
+            for (const card of ownedList) {
+              // First check tracked card individual price
+              const tracked = db.prepare('SELECT card_id FROM tracked_cards WHERE card_id = ?').get(card.id);
+              if (tracked) {
+                const cardSnap = getCardSnapshot(card.id);
+                if (cardSnap) {
+                  value += cardSnap.median_price * card.qty;
+                  continue;
+                }
+              }
+              // Then check insert-type per-card snapshot
+              const itCardSnap = db.prepare(`
+                SELECT median_price FROM price_snapshots
+                WHERE card_id = ? AND insert_type_id = ?
+                ORDER BY snapshot_date DESC LIMIT 1
+              `).get(card.id, it.id);
+
+              if (itCardSnap) {
+                value += itCardSnap.median_price * card.qty;
+              }
+            }
+          }
+        }
+
+        result.insertTypes.push({
+          id: it.id,
+          name: it.name,
+          cardCount: totalCards,
+          ownedCount: ownedCards,
+          totalQtyOwned,
+          isComplete,
+          pricingEnabled: !!it.pricing_enabled,
+          pricingMode: it.pricing_mode || 'full_set',
+          value: Math.round(value * 100) / 100,
+        });
+
+        result.totalValue += value;
+      }
+    } else {
+      // No metadata: treat all cards as one group, use legacy whole-set snapshot
+      const totalCards = db.prepare('SELECT COUNT(*) as cnt FROM cards WHERE set_id = ?').get(setId).cnt;
+      const ownedCards = db.prepare('SELECT COUNT(*) as cnt FROM cards WHERE set_id = ? AND qty > 0').get(setId).cnt;
+      const totalQtyOwned = db.prepare('SELECT COALESCE(SUM(qty), 0) as total FROM cards WHERE set_id = ? AND qty > 0').get(setId).total;
+      const isComplete = ownedCards >= totalCards && totalCards > 0;
+
+      let value = 0;
+
+      // Get legacy set snapshot
+      const setSnap = db.prepare(`
+        SELECT median_price FROM price_snapshots
+        WHERE set_id = ? AND card_id IS NULL AND insert_type_id IS NULL
+        ORDER BY snapshot_date DESC LIMIT 1
+      `).get(setId);
+
+      if (setSnap && totalCards > 0) {
+        const perCardAvg = setSnap.median_price / totalCards;
+
+        // Sum per owned card with qty, with starred overrides
+        const ownedList = db.prepare(
+          'SELECT id, qty FROM cards WHERE set_id = ? AND qty > 0'
+        ).all(setId);
+
+        for (const card of ownedList) {
+          const tracked = db.prepare('SELECT card_id FROM tracked_cards WHERE card_id = ?').get(card.id);
+          if (tracked) {
+            const cardSnap = getCardSnapshot(card.id);
+            if (cardSnap) {
+              value += cardSnap.median_price * card.qty;
+              continue;
+            }
+          }
+          value += perCardAvg * card.qty;
+        }
+      }
+
+      result.insertTypes.push({
+        id: null,
+        name: 'All Cards',
+        cardCount: totalCards,
+        ownedCount: ownedCards,
+        totalQtyOwned,
+        isComplete,
+        pricingEnabled: true,
+        pricingMode: 'full_set',
+        value: Math.round(value * 100) / 100,
+      });
+
+      result.totalValue = value;
+    }
+
+    result.totalValue = Math.round(result.totalValue * 100) / 100;
+    res.json(result);
+  });
+
+  // Portfolio summary — proportional valuation
+  router.get('/api/portfolio', (req, res) => {
+    const allSets = db.prepare('SELECT * FROM card_sets').all();
+
+    // Compute proportional valuation per set (reuse valuation logic)
+    const setValuations = [];
+    let totalSetValue = 0;
+
+    for (const cardSet of allSets) {
+      const insertTypes = db.prepare('SELECT * FROM set_insert_types WHERE set_id = ?').all(cardSet.id);
+      const hasMetadata = insertTypes.length > 0;
+      let setValue = 0;
+
+      const getCardSnapshot = (cardId) => {
+        return db.prepare(`
+          SELECT median_price FROM price_snapshots
+          WHERE card_id = ? AND insert_type_id IS NULL
+          ORDER BY snapshot_date DESC LIMIT 1
+        `).get(cardId);
+      };
+
+      if (hasMetadata) {
+        for (const it of insertTypes) {
+          if (!it.pricing_enabled) continue;
+
+          const totalCards = it.card_count || db.prepare(
+            'SELECT COUNT(*) as cnt FROM cards WHERE set_id = ? AND insert_type = ?'
+          ).get(cardSet.id, it.name).cnt;
+
+          if (it.pricing_mode === 'full_set') {
+            const snap = db.prepare(`
+              SELECT median_price FROM price_snapshots
+              WHERE insert_type_id = ? AND card_id IS NULL
+              ORDER BY snapshot_date DESC LIMIT 1
+            `).get(it.id);
+
+            if (snap && totalCards > 0) {
+              const perCardAvg = snap.median_price / totalCards;
+              const ownedList = db.prepare(
+                'SELECT id, qty FROM cards WHERE set_id = ? AND insert_type = ? AND qty > 0'
+              ).all(cardSet.id, it.name);
+
+              for (const card of ownedList) {
+                const tracked = db.prepare('SELECT card_id FROM tracked_cards WHERE card_id = ?').get(card.id);
+                if (tracked) {
+                  const cardSnap = getCardSnapshot(card.id);
+                  if (cardSnap) { setValue += cardSnap.median_price * card.qty; continue; }
+                }
+                setValue += perCardAvg * card.qty;
+              }
+            }
+          } else if (it.pricing_mode === 'per_card') {
+            const ownedList = db.prepare(
+              'SELECT id, qty FROM cards WHERE set_id = ? AND insert_type = ? AND qty > 0'
+            ).all(cardSet.id, it.name);
+
+            for (const card of ownedList) {
+              const tracked = db.prepare('SELECT card_id FROM tracked_cards WHERE card_id = ?').get(card.id);
+              if (tracked) {
+                const cardSnap = getCardSnapshot(card.id);
+                if (cardSnap) { setValue += cardSnap.median_price * card.qty; continue; }
+              }
+              const itCardSnap = db.prepare(`
+                SELECT median_price FROM price_snapshots
+                WHERE card_id = ? AND insert_type_id = ?
+                ORDER BY snapshot_date DESC LIMIT 1
+              `).get(card.id, it.id);
+              if (itCardSnap) setValue += itCardSnap.median_price * card.qty;
+            }
+          }
+        }
+      } else {
+        // Legacy: no metadata, use whole-set snapshot proportionally
+        const totalCards = db.prepare('SELECT COUNT(*) as cnt FROM cards WHERE set_id = ?').get(cardSet.id).cnt;
+        const setSnap = db.prepare(`
+          SELECT median_price FROM price_snapshots
+          WHERE set_id = ? AND card_id IS NULL AND insert_type_id IS NULL
+          ORDER BY snapshot_date DESC LIMIT 1
+        `).get(cardSet.id);
+
+        if (setSnap && totalCards > 0) {
+          const perCardAvg = setSnap.median_price / totalCards;
+          const ownedList = db.prepare(
+            'SELECT id, qty FROM cards WHERE set_id = ? AND qty > 0'
+          ).all(cardSet.id);
+
+          for (const card of ownedList) {
+            const tracked = db.prepare('SELECT card_id FROM tracked_cards WHERE card_id = ?').get(card.id);
+            if (tracked) {
+              const cardSnap = getCardSnapshot(card.id);
+              if (cardSnap) { setValue += cardSnap.median_price * card.qty; continue; }
+            }
+            setValue += perCardAvg * card.qty;
+          }
+        }
+      }
+
+      setValue = Math.round(setValue * 100) / 100;
+      if (setValue > 0) {
+        setValuations.push({
+          id: cardSet.id,
+          name: cardSet.name,
+          year: cardSet.year,
+          proportional_value: setValue,
+        });
+      }
+      totalSetValue += setValue;
+    }
+
+    // Card values: starred cards + per-card insert type pricing
+    const trackedCardValues = db.prepare(`
       SELECT c.id, c.card_number, c.player, c.parallel, cs.name as set_name, cs.year as set_year,
-             ps.median_price, ps.snapshot_date
+             ps.median_price, ps.snapshot_date, 'tracked' as source
       FROM tracked_cards tc
       JOIN cards c ON tc.card_id = c.id
       JOIN card_sets cs ON c.set_id = cs.id
-      LEFT JOIN price_snapshots ps ON ps.card_id = c.id
-        AND ps.snapshot_date = (SELECT MAX(snapshot_date) FROM price_snapshots WHERE card_id = c.id)
+      LEFT JOIN price_snapshots ps ON ps.card_id = c.id AND ps.insert_type_id IS NULL AND ps.set_id IS NULL
+        AND ps.snapshot_date = (SELECT MAX(snapshot_date) FROM price_snapshots WHERE card_id = c.id AND insert_type_id IS NULL AND set_id IS NULL)
       ORDER BY ps.median_price DESC NULLS LAST
     `).all();
 
+    // Per-card insert type prices (not already tracked)
+    const insertTypeCardValues = db.prepare(`
+      SELECT c.id, c.card_number, c.player, c.parallel, cs.name as set_name, cs.year as set_year,
+             ps.median_price, ps.snapshot_date, 'insert_type' as source
+      FROM price_snapshots ps
+      JOIN cards c ON ps.card_id = c.id
+      JOIN card_sets cs ON c.set_id = cs.id
+      WHERE ps.insert_type_id IS NOT NULL
+        AND ps.card_id NOT IN (SELECT card_id FROM tracked_cards)
+        AND ps.snapshot_date = (
+          SELECT MAX(ps2.snapshot_date) FROM price_snapshots ps2
+          WHERE ps2.card_id = ps.card_id AND ps2.insert_type_id = ps.insert_type_id
+        )
+      ORDER BY ps.median_price DESC NULLS LAST
+    `).all();
+
+    // Merge and deduplicate (tracked takes priority)
+    const seenCardIds = new Set();
+    const cardValues = [];
+    for (const c of trackedCardValues) {
+      seenCardIds.add(c.id);
+      cardValues.push(c);
+    }
+    for (const c of insertTypeCardValues) {
+      if (!seenCardIds.has(c.id)) {
+        seenCardIds.add(c.id);
+        cardValues.push(c);
+      }
+    }
+    cardValues.sort((a, b) => (b.median_price || 0) - (a.median_price || 0));
+
+    // Timeline (all snapshots)
     const timeline = db.prepare(`
       SELECT snapshot_date, SUM(median_price) as total_value
       FROM price_snapshots
@@ -983,14 +1539,12 @@ function createRoutes(db) {
       ORDER BY snapshot_date ASC
     `).all();
 
-    const totalSetValue = setValues.reduce((sum, s) => sum + (s.median_price || 0), 0);
-    const totalCardValue = cardValues.reduce((sum, c) => sum + (c.median_price || 0), 0);
+    setValuations.sort((a, b) => b.proportional_value - a.proportional_value);
 
     res.json({
-      totalValue: totalSetValue + totalCardValue,
-      totalSetValue,
-      totalCardValue,
-      topSets: setValues.filter(s => s.median_price).slice(0, 5),
+      totalValue: Math.round(totalSetValue * 100) / 100,
+      totalSetValue: Math.round(totalSetValue * 100) / 100,
+      topSets: setValuations.slice(0, 5),
       topCards: cardValues.filter(c => c.median_price).slice(0, 5),
       timeline,
     });
