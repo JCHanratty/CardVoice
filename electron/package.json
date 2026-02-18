@@ -40,7 +40,8 @@
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "icon.ico",
       "uninstallerIcon": "icon.ico",
-      "installerHeaderIcon": "icon.ico"
+      "installerHeaderIcon": "icon.ico",
+      "artifactName": "CardVoice.${ext}"
     },
     "publish": {
       "provider": "github",
