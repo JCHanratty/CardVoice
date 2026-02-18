@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createBrowserRouter, RouterProvider, Link, useLocation, useParams, Outlet } from 'react-router-dom';
+import { createHashRouter, RouterProvider, Link, useLocation, useParams, Outlet } from 'react-router-dom';
 import { Mic, Database, HelpCircle, LayoutDashboard, ChevronRight, ChevronLeft, Settings as SettingsIcon, Home, PanelLeftClose, PanelLeft, DollarSign } from 'lucide-react';
 import axios from 'axios';
 import Dashboard from './pages/Dashboard';
@@ -106,9 +106,30 @@ function Breadcrumbs() {
 
 function Layout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateReady, setUpdateReady] = useState(false);
+
+  useEffect(() => {
+    if (window.electronAPI) {
+      window.electronAPI.onUpdateAvailable((info) => setUpdateInfo(info));
+      window.electronAPI.onUpdateDownloaded((info) => {
+        setUpdateInfo(info);
+        setUpdateReady(true);
+      });
+    }
+  }, []);
 
   return (
     <div className="min-h-screen bg-cv-dark flex">
+      {/* Auto-update banner */}
+      {updateInfo && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-cv-gold/15 border-b border-cv-gold/30 px-4 py-2 text-center text-sm text-cv-gold font-medium backdrop-blur-sm">
+          {updateReady
+            ? `v${updateInfo.version} downloaded — will install on restart`
+            : `Downloading update v${updateInfo.version}...`
+          }
+        </div>
+      )}
       {/* Sidebar */}
       <aside className={`sidebar-transition flex flex-col bg-cv-panel/80 backdrop-blur-md border-r border-cv-border/50 sticky top-0 h-screen z-40 ${collapsed ? 'w-[72px]' : 'w-[260px]'}`}>
         {/* Logo area */}
@@ -162,7 +183,7 @@ function Layout() {
   );
 }
 
-const router = createBrowserRouter([
+const router = createHashRouter([
   {
     path: '/',
     element: <LandingPage />,

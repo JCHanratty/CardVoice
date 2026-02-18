@@ -34,6 +34,25 @@ function createRoutes(db) {
     res.json(sets);
   });
 
+  // GET /api/sets/recent — last N sets added
+  router.get('/api/sets/recent', (req, res) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 5, 20);
+      const sets = db.prepare(`
+        SELECT cs.id, cs.name, cs.year, cs.brand, cs.sport, cs.total_cards,
+          COALESCE(SUM(CASE WHEN c.qty > 0 THEN 1 ELSE 0 END), 0) as owned_count
+        FROM card_sets cs
+        LEFT JOIN cards c ON c.set_id = cs.id
+        GROUP BY cs.id
+        ORDER BY cs.id DESC
+        LIMIT ?
+      `).all(limit);
+      res.json(sets);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/sets — create set
   router.post('/api/sets', (req, res) => {
     const { name, year, brand, sport } = req.body;

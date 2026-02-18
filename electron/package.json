@@ -1,15 +1,13 @@
 {
   "name": "cardvoice",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Voice-powered sports card collection manager",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "NODE_ENV=development electron .",
-    "build": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dev": "cross-env NODE_ENV=development electron .",
+    "build": "electron-builder --win",
+    "rebuild-sqlite": "npx @electron/rebuild -f -w better-sqlite3 -m ../server"
   },
   "build": {
     "appId": "com.cardvoice.app",
@@ -24,30 +22,39 @@
     ],
     "extraResources": [
       {
-        "from": "../backend",
-        "to": "backend",
-        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+        "from": "../server",
+        "to": "server",
+        "filter": ["**/*", "!tests/**", "!*.db", "!*.db-journal", "!*.db-wal", "!.env"]
       },
       {
-        "from": "../frontend/build",
-        "to": "frontend/build"
+        "from": "../frontend/dist",
+        "to": "frontend/dist"
       }
     ],
-    "mac": {
-      "category": "public.app-category.utilities",
-      "target": "dmg"
-    },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "icon.ico"
     },
-    "linux": {
-      "target": "AppImage"
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "installerHeaderIcon": "icon.ico"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "JCHanratty",
+      "repo": "CardVoice"
     }
   },
   "dependencies": {
-    "electron": "^28.1.0"
+    "electron-updater": "^6.3.0"
   },
   "devDependencies": {
-    "electron-builder": "^24.9.1"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "@electron/rebuild": "^3.6.0",
+    "cross-env": "^7.0.3"
   }
 }

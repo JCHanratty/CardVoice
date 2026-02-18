@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Mic, Plus, Clock, Zap, Target, Database } from 'lucide-react';
+import { Mic, Plus, Clock, Zap, Target, Database, ChevronRight } from 'lucide-react';
 import axios from 'axios';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
 import Logo from '../components/Logo';
@@ -132,6 +132,8 @@ export default function Dashboard() {
   const [recentSessions, setRecentSessions] = useState([]);
   const [portfolio, setPortfolio] = useState(null);
   const [priceChanges, setPriceChanges] = useState([]);
+  const [recentSets, setRecentSets] = useState([]);
+  const [releases, setReleases] = useState([]);
 
   useEffect(() => {
     axios.get(`${API}/api/sets`).then(r => setSets(r.data)).catch(() => {});
@@ -139,6 +141,12 @@ export default function Dashboard() {
     axios.get(`${API}/api/voice-sessions/recent`).then(r => setRecentSessions(r.data)).catch(() => {});
     axios.get(`${API}/api/portfolio`).then(r => setPortfolio(r.data)).catch(() => {});
     axios.get(`${API}/api/portfolio/changes`).then(r => setPriceChanges(r.data)).catch(() => {});
+    axios.get(`${API}/api/sets/recent?limit=5`).then(r => setRecentSets(r.data)).catch(() => {});
+
+    fetch('https://api.github.com/repos/JCHanratty/CardVoice/releases?per_page=3')
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setReleases(data); })
+      .catch(() => {});
   }, []);
 
   const totalChecklist = sets.reduce((acc, s) => acc + (s.total_cards || 0), 0);
@@ -334,6 +342,40 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* ═══ RECENTLY ADDED SETS ═══ */}
+      {recentSets.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-xl font-display font-bold text-cv-text mb-4 flex items-center gap-2">
+            <Database size={20} className="text-cv-accent" />
+            Recently Added Sets
+          </h2>
+          <div className="grid gap-3">
+            {recentSets.map(set => (
+              <Link
+                key={set.id}
+                to={`/sets/${set.id}`}
+                className="flex items-center justify-between p-4 rounded-xl bg-cv-panel/60 border border-cv-border/40 hover:border-cv-accent/40 transition-all group"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-cv-accent/10 flex items-center justify-center text-cv-accent font-mono text-sm font-bold">
+                    {set.year ? String(set.year).slice(-2) : '\u2014'}
+                  </div>
+                  <div>
+                    <p className="text-cv-text font-medium group-hover:text-cv-accent transition-colors">
+                      {set.year ? `${set.year} ` : ''}{set.name}
+                    </p>
+                    <p className="text-cv-muted text-sm">
+                      {set.brand || 'Unknown'} · {set.total_cards} cards · {set.owned_count} owned
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors" />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ═══ SET PROGRESS ═══ */}
       {(completedSets.length > 0 || activeSets.length > 0) && (
@@ -562,6 +604,37 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ RELEASE NOTES ═══ */}
+      {releases.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-xl font-display font-bold text-cv-text mb-4 flex items-center gap-2">
+            <Zap size={20} className="text-cv-gold" />
+            What's New
+            {window.electronAPI?.isElectron && (
+              <span className="text-xs font-mono text-cv-muted ml-auto">
+                Current: v{window.electronAPI?.getAppVersion?.() || '\u2014'}
+              </span>
+            )}
+          </h2>
+          <div className="space-y-3">
+            {releases.map(release => (
+              <div key={release.id} className="p-4 rounded-xl bg-cv-panel/60 border border-cv-border/40">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-cv-gold font-mono text-sm font-bold">{release.tag_name}</span>
+                  <span className="text-cv-muted text-xs">
+                    {new Date(release.published_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <p className="text-cv-text text-sm leading-relaxed whitespace-pre-wrap">
+                  {(release.body || 'No release notes.').slice(0, 300)}
+                  {(release.body || '').length > 300 ? '...' : ''}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       )}

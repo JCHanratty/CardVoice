@@ -1,19 +1,74 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
+const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
 let serverHandle; // { app, server, db } from createServer()
 const BACKEND_PORT = 8000;
-const FRONTEND_PORT = 3000;
 
 // ============================================================
-// Backend Management — in-process Node.js server (no Python)
+// Resource paths — different in dev vs packaged
+// ============================================================
+
+function getServerPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'server');
+  }
+  return path.join(__dirname, '..', 'server');
+}
+
+function getFrontendPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'frontend', 'dist', 'index.html');
+  }
+  return path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
+}
+
+// ============================================================
+// Backend Management — in-process Node.js server
 // ============================================================
 
 function startBackend() {
-  const { createServer } = require('../server');
+  const serverDir = getServerPath();
+
+  // Ensure native modules (better-sqlite3) resolve from the server's node_modules
+  if (app.isPackaged) {
+    process.env.NODE_PATH = path.join(serverDir, 'node_modules');
+    require('module').Module._initPaths();
+  }
+
+  const { createServer } = require(path.join(serverDir, 'index.js'));
   serverHandle = createServer({ port: BACKEND_PORT });
   console.log(`[Backend] Node.js server started on port ${BACKEND_PORT}`);
+}
+
+// ============================================================
+// Auto-Update
+// ============================================================
+
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('Update available:', info.version);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-available', info);
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('Update downloaded:', info.version);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-downloaded', info);
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('Auto-update error:', err.message);
+  });
+
+  autoUpdater.checkForUpdatesAndNotify();
 }
 
 // ============================================================
@@ -27,13 +82,11 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     title: 'CardVoice',
-    titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0f1419',
+    backgroundColor: '#18181B',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      // Enable microphone access
-      permissions: ['microphone'],
+      preload: path.join(__dirname, 'preload.js'),
     },
     icon: path.join(__dirname, 'icon.png'),
   });
@@ -47,18 +100,15 @@ function createWindow() {
     }
   });
 
-  // In development, load from React dev server
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
   if (isDev) {
-    mainWindow.loadURL(`http://localhost:${FRONTEND_PORT}`);
-    // Open DevTools in dev
+    mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // In production, load built React files (Vite outputs to dist/)
-    mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
+    mainWindow.loadFile(getFrontendPath());
   }
 
-  // Open links in default browser
+  // Open external links in default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -68,6 +118,12 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// ============================================================
+// IPC Handlers
+// ============================================================
+
+ipcMain.handle('get-app-version', () => app.getVersion());
 
 // ============================================================
 // App Lifecycle
@@ -83,6 +139,10 @@ app.whenReady().then(() => {
   }
 
   createWindow();
+
+  if (app.isPackaged) {
+    setupAutoUpdater();
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -90,15 +150,7 @@ app.on('window-all-closed', () => {
     serverHandle.server.close();
     serverHandle.db.close();
   }
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (mainWindow === null) {
-    createWindow();
-  }
+  app.quit();
 });
 
 app.on('before-quit', () => {

@@ -1,0 +1,98 @@
+<svg
+  width="512"
+  height="512"
+  viewBox="0 0 64 64"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <defs>
+    <linearGradient id="cv-card-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B2252" />
+      <stop offset="100%" stop-color="#D4A847" />
+    </linearGradient>
+    <linearGradient id="cv-mic-grad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#F0D78C" />
+      <stop offset="100%" stop-color="#D4A847" />
+    </linearGradient>
+    <linearGradient id="cv-wave-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4A847" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#8B2252" stop-opacity="0.6" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle for icon visibility -->
+  <circle cx="32" cy="32" r="31" fill="#18181B" />
+
+  <!-- Card shape -->
+  <rect
+    x="12" y="4" width="40" height="56" rx="6"
+    fill="#18181B"
+    stroke="url(#cv-card-grad)"
+    stroke-width="2.5"
+  />
+
+  <!-- Inner card shine -->
+  <rect
+    x="16" y="8" width="32" height="48" rx="3"
+    fill="none"
+    stroke="url(#cv-card-grad)"
+    stroke-width="0.5"
+    opacity="0.2"
+  />
+
+  <!-- Microphone body -->
+  <rect x="28" y="20" width="8" height="14" rx="4" fill="url(#cv-mic-grad)" />
+
+  <!-- Mic cradle arc -->
+  <path
+    d="M25 32 Q25 40 32 40 Q39 40 39 32"
+    fill="none"
+    stroke="url(#cv-mic-grad)"
+    stroke-width="2"
+    stroke-linecap="round"
+  />
+
+  <!-- Mic stand -->
+  <line x1="32" y1="40" x2="32" y2="46" stroke="url(#cv-mic-grad)" stroke-width="2" stroke-linecap="round" />
+  <line x1="28" y1="46" x2="36" y2="46" stroke="url(#cv-mic-grad)" stroke-width="2" stroke-linecap="round" />
+
+  <!-- Sound wave arcs - left -->
+  <path
+    d="M20 24 Q16 32 20 40"
+    fill="none"
+    stroke="url(#cv-wave-grad)"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    opacity="0.7"
+  />
+  <path
+    d="M16 21 Q10 32 16 43"
+    fill="none"
+    stroke="url(#cv-wave-grad)"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    opacity="0.4"
+  />
+
+  <!-- Sound wave arcs - right -->
+  <path
+    d="M44 24 Q48 32 44 40"
+    fill="none"
+    stroke="url(#cv-wave-grad)"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    opacity="0.7"
+  />
+  <path
+    d="M48 21 Q54 32 48 43"
+    fill="none"
+    stroke="url(#cv-wave-grad)"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    opacity="0.4"
+  />
+
+  <!-- Corner diamonds -->
+  <path d="M18 12 L20 14 L18 16 L16 14 Z" fill="#D4A847" opacity="0.8" />
+  <path d="M46 48 L48 50 L46 52 L44 50 Z" fill="#D4A847" opacity="0.8" />
+</svg>
