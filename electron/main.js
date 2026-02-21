@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, Menu, dialog } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
@@ -37,6 +37,8 @@ function startBackend() {
     require('module').Module._initPaths();
   }
 
+  process.env.ELECTRON_IS_PACKAGED = app.isPackaged ? 'true' : 'false';
+
   const { createServer } = require(path.join(serverDir, 'index.js'));
   serverHandle = createServer({ port: BACKEND_PORT });
   console.log(`[Backend] Node.js server started on port ${BACKEND_PORT}`);
@@ -69,6 +71,118 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.checkForUpdatesAndNotify();
+}
+
+// ============================================================
+// Application Menu
+// ============================================================
+
+function buildMenu() {
+  const isMac = process.platform === 'darwin';
+
+  const template = [
+    // File Menu
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Set',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => sendMenuAction('navigate', '/sets/add'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Import CSV',
+          click: () => sendMenuAction('import-csv'),
+        },
+        {
+          label: 'Import from CardVision',
+          click: () => sendMenuAction('import-cardvision'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Export Current Set as CSV',
+          click: () => sendMenuAction('export-csv'),
+        },
+        {
+          label: 'Export Current Set as Excel',
+          click: () => sendMenuAction('export-excel'),
+        },
+        { type: 'separator' },
+        isMac ? { role: 'close' } : { label: 'Exit', accelerator: 'Alt+F4', click: () => app.quit() },
+      ],
+    },
+    // Edit Menu
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    // View Menu
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    // Window Menu
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'maximize' },
+        { type: 'separator' },
+        { role: 'close' },
+      ],
+    },
+    // Help Menu
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'How To Guide',
+          click: () => sendMenuAction('navigate', '/how-to'),
+        },
+        { type: 'separator' },
+        {
+          label: 'About CardVoice',
+          click: () => {
+            dialog.showMessageBox(mainWindow, {
+              type: 'info',
+              title: 'About CardVoice',
+              message: 'CardVoice',
+              detail: `Version ${app.getVersion()}\n\nCard collection management with voice entry, checklist import, and price tracking.`,
+              buttons: ['OK'],
+            });
+          },
+        },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
+function sendMenuAction(action, payload) {
+  if (mainWindow) {
+    mainWindow.webContents.send('menu-action', { action, payload });
+  }
 }
 
 // ============================================================
@@ -139,6 +253,7 @@ app.whenReady().then(() => {
   }
 
   createWindow();
+  buildMenu();
 
   if (app.isPackaged) {
     setupAutoUpdater();

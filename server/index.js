@@ -24,6 +24,14 @@ function createServer(opts = {}) {
 
   app.use(createRoutes(db));
 
+  // Merge bundled checklist catalog on startup
+  const { mergeCatalog } = require('./catalog-merge');
+  const isPackaged = process.env.ELECTRON_IS_PACKAGED === 'true' || false;
+  const mergeResult = mergeCatalog(db, { isPackaged });
+  if (mergeResult.skipped) {
+    console.log(`[Catalog] Skipped: ${mergeResult.reason}`);
+  }
+
   // Start background price sync service
   const syncService = new SyncService(db);
   app.locals.syncService = syncService;
