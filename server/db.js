@@ -125,6 +125,15 @@ function openDb(dbPath) {
     );
   `);
 
+  // App metadata (catalog version, settings, credentials)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key        TEXT PRIMARY KEY,
+      value      TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // Pricing pipeline tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS tracked_cards (
@@ -226,4 +235,16 @@ function openDb(dbPath) {
 }
 
 
-module.exports = { openDb, backupDb, DB_PATH, DB_DIR };
+function getMeta(db, key) {
+  const row = db.prepare('SELECT value FROM app_meta WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+function setMeta(db, key, value) {
+  db.prepare(
+    `INSERT INTO app_meta (key, value, updated_at) VALUES (?, ?, datetime('now','localtime'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  ).run(key, value);
+}
+
+module.exports = { openDb, backupDb, getMeta, setMeta, DB_PATH, DB_DIR };
