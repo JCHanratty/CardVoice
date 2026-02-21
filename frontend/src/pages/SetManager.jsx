@@ -12,9 +12,11 @@ export default function SetManager() {
   const [collapsedYears, setCollapsedYears] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [hasCardVision, setHasCardVision] = useState(false);
 
   useEffect(() => {
     loadSets();
+    axios.get(`${API}/api/cardvision-status`).then(r => setHasCardVision(r.data.exists)).catch(() => {});
 
     // Listen for Electron menu actions
     const handleImportCSV = () => {
@@ -193,8 +195,8 @@ export default function SetManager() {
               <List size={16} />
             </button>
           </div>
-          {/* Show prominent CardVision button only when no sets exist */}
-          {sets.length === 0 && (
+          {/* Show prominent CardVision button only when no sets exist and CardVision is installed */}
+          {hasCardVision && sets.length === 0 && (
             <button onClick={migrateFromCardVision} disabled={migrating}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cv-gold/10 border border-cv-gold/30 text-cv-gold hover:bg-cv-gold/20 disabled:opacity-50 transition-all">
               {migrating ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
@@ -210,8 +212,8 @@ export default function SetManager() {
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 transition-all">
             <Plus size={14} /> New Set
           </Link>
-          {/* More menu with re-import option when sets exist */}
-          {sets.length > 0 && (
+          {/* More menu with re-import option when sets exist and CardVision is installed */}
+          {hasCardVision && sets.length > 0 && (
             <div className="relative">
               <button
                 onClick={() => setShowMoreMenu(!showMoreMenu)}
