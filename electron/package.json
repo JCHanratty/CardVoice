@@ -29,6 +29,10 @@
       {
         "from": "../frontend/dist",
         "to": "frontend/dist"
+      },
+      {
+        "from": "resources/checklist-catalog.db",
+        "to": "checklist-catalog.db"
       }
     ],
     "win": {
