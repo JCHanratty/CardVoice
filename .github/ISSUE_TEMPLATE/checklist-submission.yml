@@ -1,0 +1,43 @@
+name: Submit a Checklist
+description: Submit a checklist for review and inclusion in CardVoice
+labels: [checklist-submission]
+body:
+  - type: input
+    id: set_name
+    attributes:
+      label: Set Name
+      placeholder: "e.g., 2024 Topps Chrome"
+    validations:
+      required: true
+  - type: input
+    id: year
+    attributes:
+      label: Year
+      placeholder: "e.g., 2024"
+    validations:
+      required: true
+  - type: input
+    id: brand
+    attributes:
+      label: Brand
+      placeholder: "e.g., Topps"
+  - type: textarea
+    id: checklist_data
+    attributes:
+      label: Checklist Data
+      description: Paste the full checklist text (from Beckett, CardboardConnection, etc.)
+      placeholder: |
+        1 Player Name Team
+        2 Player Name Team
+        ...
+    validations:
+      required: true
+  - type: textarea
+    id: parallels
+    attributes:
+      label: Parallels
+      description: List any parallel variations (name, print run, exclusive)
+      placeholder: |
+        Gold /50
+        Silver /100
+        ...

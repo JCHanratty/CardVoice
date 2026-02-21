@@ -1,0 +1,28 @@
+name: Request a Set
+description: Request a specific set to be added to CardVoice
+labels: [set-request]
+body:
+  - type: input
+    id: set_name
+    attributes:
+      label: Set Name
+      placeholder: "e.g., 2024 Bowman Chrome"
+    validations:
+      required: true
+  - type: input
+    id: year
+    attributes:
+      label: Year
+      placeholder: "e.g., 2024"
+    validations:
+      required: true
+  - type: input
+    id: brand
+    attributes:
+      label: Brand
+      placeholder: "e.g., Bowman"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Any additional details (specific inserts, parallels, etc.)
