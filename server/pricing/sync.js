@@ -1,4 +1,4 @@
-const { scrapeEbaySold, filterOutliers, buildCardQuery, buildSetQuery, buildInsertSetQuery } = require('./scraper');
+const { scrapeEbaySold, filterOutliers, buildCardQuery, buildSetQuery, buildInsertSetQuery, loadCredentials, hasCredentials } = require('./scraper');
 const config = require('./scraper-config.json');
 
 class SyncService {
@@ -21,6 +21,12 @@ class SyncService {
 
   start() {
     if (!this.enabled) return;
+
+    loadCredentials(this.db);
+    if (!hasCredentials()) {
+      console.log('[Sync] Skipping — no eBay credentials configured');
+      return;
+    }
 
     const lastSnapshot = this.db.prepare(
       `SELECT MAX(snapshot_date) as last FROM price_snapshots`

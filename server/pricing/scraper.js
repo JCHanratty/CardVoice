@@ -1,8 +1,35 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const config = require('./scraper-config.json');
 
-const EBAY_APP_ID = process.env.EBAY_APP_ID;
-const EBAY_CERT_ID = process.env.EBAY_CERT_ID;
+// Credentials loaded dynamically — DB takes priority over .env
+let EBAY_APP_ID = process.env.EBAY_APP_ID || '';
+let EBAY_CERT_ID = process.env.EBAY_CERT_ID || '';
+
+/**
+ * Initialize credentials from the database (called by SyncService on startup).
+ * Falls back to .env values if DB has none.
+ */
+function loadCredentials(db) {
+  const { getMeta } = require('../db');
+  const dbAppId = getMeta(db, 'ebay_app_id');
+  const dbCertId = getMeta(db, 'ebay_cert_id');
+  if (dbAppId && dbCertId) {
+    EBAY_APP_ID = dbAppId;
+    EBAY_CERT_ID = dbCertId;
+    console.log('[Scraper] Loaded eBay credentials from user settings');
+  } else if (EBAY_APP_ID && EBAY_CERT_ID) {
+    console.log('[Scraper] Using eBay credentials from .env');
+  } else {
+    console.log('[Scraper] No eBay credentials configured — price sync disabled');
+  }
+}
+
+/**
+ * Check if credentials are available.
+ */
+function hasCredentials() {
+  return !!(EBAY_APP_ID && EBAY_CERT_ID);
+}
 
 const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
 const BROWSE_API_URL = 'https://api.ebay.com/buy/browse/v1/item_summary/search';
@@ -211,4 +238,6 @@ module.exports = {
   buildSetQuery,
   buildInsertSetQuery,
   getToken,
+  loadCredentials,
+  hasCredentials,
 };
