@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createHashRouter, RouterProvider, Link, useLocation, useParams, Outlet } from 'react-router-dom';
+import { createHashRouter, RouterProvider, Link, useLocation, useParams, Outlet, useNavigate } from 'react-router-dom';
 import { Mic, Database, HelpCircle, LayoutDashboard, ChevronRight, ChevronLeft, Settings as SettingsIcon, Home, PanelLeftClose, PanelLeft, DollarSign } from 'lucide-react';
 import axios from 'axios';
 import Dashboard from './pages/Dashboard';
@@ -108,6 +108,7 @@ function Layout() {
   const [collapsed, setCollapsed] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateReady, setUpdateReady] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (window.electronAPI) {
@@ -116,18 +117,64 @@ function Layout() {
         setUpdateInfo(info);
         setUpdateReady(true);
       });
+      window.electronAPI.onMenuAction(({ action, payload }) => {
+        switch (action) {
+          case 'navigate':
+            navigate(payload);
+            break;
+          case 'import-csv':
+            window.dispatchEvent(new CustomEvent('menu-import-csv'));
+            break;
+          case 'import-cardvision':
+            window.dispatchEvent(new CustomEvent('menu-import-cardvision'));
+            break;
+          case 'export-csv':
+            window.dispatchEvent(new CustomEvent('menu-export-csv'));
+            break;
+          case 'export-excel':
+            window.dispatchEvent(new CustomEvent('menu-export-excel'));
+            break;
+        }
+      });
     }
-  }, []);
+  }, [navigate]);
 
   return (
     <div className="min-h-screen bg-cv-dark flex">
-      {/* Auto-update banner */}
-      {updateInfo && (
+      {/* Update Modal */}
+      {updateReady && updateInfo && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-cv-panel border border-cv-border rounded-2xl p-8 max-w-sm w-full mx-4 shadow-2xl">
+            <h2 className="text-xl font-display font-bold text-cv-text text-center mb-1">
+              CardVoice v{updateInfo.version}
+            </h2>
+            <p className="text-sm text-cv-muted text-center mb-6">
+              A new version has been downloaded and is ready to install.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => window.electronAPI?.quitAndInstall()}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 transition-all"
+              >
+                Restart Now
+              </button>
+              <button
+                onClick={() => setUpdateReady(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+              >
+                Later
+              </button>
+            </div>
+            <p className="text-[10px] text-cv-muted/50 text-center mt-3">
+              Update will install automatically on next quit
+            </p>
+          </div>
+        </div>
+      )}
+      {/* Downloading banner (non-modal, subtle) */}
+      {updateInfo && !updateReady && (
         <div className="fixed top-0 left-0 right-0 z-50 bg-cv-gold/15 border-b border-cv-gold/30 px-4 py-2 text-center text-sm text-cv-gold font-medium backdrop-blur-sm">
-          {updateReady
-            ? `v${updateInfo.version} downloaded — will install on restart`
-            : `Downloading update v${updateInfo.version}...`
-          }
+          Downloading update v{updateInfo.version}...
         </div>
       )}
       {/* Sidebar */}
