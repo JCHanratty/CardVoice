@@ -434,6 +434,34 @@ function SetsTab() {
         </div>
       </Section>
 
+      <Section icon={Search} title="Setting Up eBay Price Tracking">
+        <p className="text-sm text-cv-text/80 mb-4">
+          CardVoice can track card prices using the eBay Browse API. Each user needs their own free eBay Developer credentials.
+        </p>
+        <Step num={1}>
+          Go to{' '}
+          <a href="https://developer.ebay.com" target="_blank" rel="noopener noreferrer" className="text-cv-accent hover:underline">
+            developer.ebay.com
+          </a>{' '}
+          and sign in with your eBay account (or create one).
+        </Step>
+        <Step num={2}>
+          Navigate to <strong className="text-cv-text">My Account → Application Access</strong> and click <strong className="text-cv-text">Create Application</strong>.
+        </Step>
+        <Step num={3}>
+          Name your application (e.g., "CardVoice") and select <strong className="text-cv-text">Production</strong> environment.
+        </Step>
+        <Step num={4}>
+          Once created, copy the <strong className="text-cv-text">App ID (Client ID)</strong> and <strong className="text-cv-text">Cert ID (Client Secret)</strong> from the Production keys section.
+        </Step>
+        <Step num={5}>
+          In CardVoice, go to{' '}
+          <Link to="/settings" className="text-cv-accent hover:underline">Settings</Link>{' '}
+          → <strong className="text-cv-text">Price Tracking Setup</strong>, paste both values, and click <strong className="text-cv-text">Save & Test</strong>.
+        </Step>
+        <Tip>The eBay Developer program is free for Browse API usage. No paid plan is required for CardVoice's price tracking.</Tip>
+      </Section>
+
       <Section icon={Keyboard} title="Tips & Shortcuts">
         <div className="space-y-2 text-sm text-cv-text/80">
           <div className="flex items-start gap-2">
