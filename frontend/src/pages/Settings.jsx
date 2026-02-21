@@ -14,6 +14,12 @@ export default function Settings() {
   const [sets, setSets] = useState([]);
   const [expandedSetId, setExpandedSetId] = useState(null);
   const [setMetadata, setSetMetadata] = useState({});
+  const [ebayAppId, setEbayAppId] = useState('');
+  const [ebayCertId, setEbayCertId] = useState('');
+  const [ebayStatus, setEbayStatus] = useState(null); // null, 'saving', 'testing', 'valid', 'invalid'
+  const [ebayError, setEbayError] = useState('');
+  const [ebayConfigured, setEbayConfigured] = useState(false);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(true);
 
   const fetchStatus = () => {
     axios.get(`${API}/api/sync/status`).then(r => {
@@ -30,6 +36,16 @@ export default function Settings() {
     fetchStatus();
     fetchSets();
     axios.get(`${API}/api/tracked-cards`).then(r => setTrackedCards(r.data)).catch(() => {});
+    axios.get(`${API}/api/settings/ebay`).then(r => {
+      setEbayConfigured(r.data.configured);
+      if (r.data.configured) {
+        setEbayAppId(r.data.app_id);
+        setEbayCertId(r.data.cert_id);
+      }
+    }).catch(() => {});
+    axios.get(`${API}/api/settings/analytics`).then(r => {
+      setAnalyticsEnabled(r.data.enabled);
+    }).catch(() => {});
     const interval = setInterval(fetchStatus, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -78,6 +94,32 @@ export default function Settings() {
     await axios.put(`${API}/api/insert-types/${itId}/pricing`, { pricing_mode: mode });
     const res = await axios.get(`${API}/api/sets/${setId}/metadata`);
     setSetMetadata(prev => ({ ...prev, [setId]: res.data }));
+  };
+
+  const saveEbayCredentials = async () => {
+    setEbayStatus('saving');
+    try {
+      await axios.put(`${API}/api/settings/ebay`, { app_id: ebayAppId, cert_id: ebayCertId });
+      setEbayStatus('testing');
+      const testRes = await axios.post(`${API}/api/settings/ebay/test`);
+      if (testRes.data.valid) {
+        setEbayStatus('valid');
+        setEbayConfigured(true);
+        setEbayError('');
+      } else {
+        setEbayStatus('invalid');
+        setEbayError(testRes.data.error || 'Invalid credentials');
+      }
+    } catch (err) {
+      setEbayStatus('invalid');
+      setEbayError(err.response?.data?.detail || err.message);
+    }
+  };
+
+  const toggleAnalytics = () => {
+    const newVal = !analyticsEnabled;
+    setAnalyticsEnabled(newVal);
+    axios.put(`${API}/api/settings/analytics`, { enabled: newVal });
   };
 
   if (!status) return <div className="text-cv-muted p-8">Loading...</div>;
@@ -241,6 +283,75 @@ export default function Settings() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* eBay API Credentials */}
+      <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">
+        <h2 className="text-lg font-display font-semibold text-cv-text mb-2">Price Tracking Setup</h2>
+        <p className="text-xs text-cv-muted mb-4">
+          Enter your eBay Developer API credentials to enable price tracking.
+          See <a href="#/how-to" className="text-cv-gold hover:underline">How To</a> for setup instructions.
+        </p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-sm text-cv-text block mb-1">eBay App ID (Client ID)</label>
+            <input
+              type="text"
+              value={ebayAppId}
+              onChange={e => setEbayAppId(e.target.value)}
+              placeholder="YourApp-Baseball-PRD-..."
+              className="w-full bg-cv-dark border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text placeholder:text-cv-muted/50 focus:border-cv-accent focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="text-sm text-cv-text block mb-1">eBay Cert ID (Client Secret)</label>
+            <input
+              type="password"
+              value={ebayCertId}
+              onChange={e => setEbayCertId(e.target.value)}
+              placeholder="PRD-..."
+              className="w-full bg-cv-dark border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text placeholder:text-cv-muted/50 focus:border-cv-accent focus:outline-none"
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={saveEbayCredentials}
+              disabled={!ebayAppId || !ebayCertId || ebayStatus === 'saving' || ebayStatus === 'testing'}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-cv-accent/20 hover:bg-cv-accent/30 text-cv-accent disabled:opacity-50 transition-all"
+            >
+              {ebayStatus === 'saving' || ebayStatus === 'testing' ? (
+                <><RefreshCw size={14} className="animate-spin" /> Testing...</>
+              ) : 'Save & Test'}
+            </button>
+            {ebayStatus === 'valid' && (
+              <span className="text-sm text-green-400 flex items-center gap-1">Credentials valid</span>
+            )}
+            {ebayStatus === 'invalid' && (
+              <span className="text-sm text-red-400">{ebayError || 'Invalid credentials'}</span>
+            )}
+            {ebayConfigured && !ebayStatus && (
+              <span className="text-xs text-cv-muted">Credentials configured</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Analytics */}
+      <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-display font-semibold text-cv-text">Anonymous Usage Stats</h2>
+            <p className="text-xs text-cv-muted mt-1">
+              Sends app version, OS, and card/set counts once per day. No personal data is collected.
+            </p>
+          </div>
+          <button onClick={toggleAnalytics} className="ml-4 flex-shrink-0">
+            <div className={`w-12 h-6 rounded-full transition-colors flex items-center px-0.5 ${analyticsEnabled ? 'bg-cv-accent' : 'bg-cv-border'}`}>
+              <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${analyticsEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+            </div>
+          </button>
         </div>
       </div>
 
