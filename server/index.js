@@ -37,6 +37,10 @@ function createServer(opts = {}) {
   app.locals.syncService = syncService;
   setTimeout(() => syncService.start(), 5000);
 
+  // Anonymous heartbeat (delayed, non-blocking)
+  const { sendHeartbeat } = require('./analytics');
+  setTimeout(() => sendHeartbeat(db), 10000);
+
   const server = app.listen(port, () => {
     console.log(`CardVoice server listening on http://localhost:${port}`);
   });
