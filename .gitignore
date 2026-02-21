@@ -17,6 +17,7 @@ server/card_logger.db
 
 # Electron build output
 electron/dist/
+electron/resources/checklist-catalog.db
 
 # Legacy Python backend
 backend/
