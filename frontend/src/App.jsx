@@ -201,6 +201,20 @@ function Layout() {
           <NavLink to="/settings" icon={SettingsIcon} label="Settings" collapsed={collapsed} />
         </nav>
 
+        {/* Support link */}
+        <div className="px-3 py-1">
+          <a
+            href="https://buymeacoffee.com/jchanratty"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`flex items-center gap-2 w-full px-3 py-2 rounded-xl text-cv-muted hover:text-cv-gold hover:bg-cv-gold/5 transition-all text-sm ${collapsed ? 'justify-center' : ''}`}
+            title="Support CardVoice"
+          >
+            <span className="text-base">&#9829;</span>
+            {!collapsed && <span>Support</span>}
+          </a>
+        </div>
+
         {/* Collapse toggle */}
         <div className="px-3 py-3 border-t border-cv-border/30">
           <button

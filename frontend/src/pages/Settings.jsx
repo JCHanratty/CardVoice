@@ -401,7 +401,7 @@ export default function Settings() {
       </div>
 
       {/* Sync Log */}
-      <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50">
+      <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">
         <h2 className="text-lg font-display font-semibold text-cv-text mb-4 flex items-center gap-2">
           <Clock size={18} /> Sync Log
         </h2>
@@ -422,6 +422,22 @@ export default function Settings() {
             ))
           )}
         </div>
+      </div>
+
+      {/* Support */}
+      <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50">
+        <h2 className="text-lg font-display font-semibold text-cv-text mb-2">Support CardVoice</h2>
+        <p className="text-sm text-cv-muted mb-3">
+          CardVoice is free and open source. If you find it useful, consider supporting development.
+        </p>
+        <a
+          href="https://buymeacoffee.com/jchanratty"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-cv-gold/15 text-cv-gold border border-cv-gold/25 hover:bg-cv-gold/25 transition-all"
+        >
+          &#9829; Buy Me a Coffee
+        </a>
       </div>
     </div>
   );
