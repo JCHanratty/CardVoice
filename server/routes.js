@@ -261,6 +261,50 @@ function createRoutes(db) {
     res.json({ id: cardId, ...updated });
   });
 
+  // PUT /api/sets/:id/bulk-qty — bulk set qty for filtered cards
+  router.put('/api/sets/:id/bulk-qty', (req, res) => {
+    const setId = Number(req.params.id);
+    const cardSet = db.prepare('SELECT id FROM card_sets WHERE id = ?').get(setId);
+    if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
+
+    const { qty, insert_type, parallel, card_ids } = req.body;
+    const newQty = typeof qty === 'number' ? Math.max(0, qty) : 1;
+
+    let updated = 0;
+
+    const doBulk = db.transaction(() => {
+      if (Array.isArray(card_ids) && card_ids.length > 0) {
+        // Update specific cards by ID
+        const updateCard = db.prepare('UPDATE cards SET qty = ? WHERE id = ? AND set_id = ?');
+        for (const cardId of card_ids) {
+          const result = updateCard.run(newQty, Number(cardId), setId);
+          updated += result.changes;
+        }
+      } else {
+        // Build WHERE clause from filters
+        let sql = 'UPDATE cards SET qty = ? WHERE set_id = ?';
+        const params = [newQty, setId];
+
+        if (insert_type !== undefined && insert_type !== null) {
+          sql += ' AND insert_type = ?';
+          params.push(insert_type);
+        }
+        if (parallel !== undefined && parallel !== null) {
+          sql += ' AND parallel = ?';
+          params.push(parallel);
+        }
+
+        const result = db.prepare(sql).run(...params);
+        updated = result.changes;
+      }
+    });
+
+    backupDb();
+    doBulk();
+
+    res.json({ updated, qty: newQty });
+  });
+
   // PUT /api/sets/:id/voice-qty — parse voice text, SET qty
   router.put('/api/sets/:id/voice-qty', (req, res) => {
     const setId = Number(req.params.id);
@@ -923,6 +967,86 @@ function createRoutes(db) {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${cardSet.name}.csv"`);
     res.send(lines.join('\n'));
+  });
+
+  // ============================================================
+  // App Settings (eBay credentials, analytics)
+  // ============================================================
+
+  const { getMeta, setMeta } = require('./db');
+
+  // PUT /api/settings/ebay — save eBay credentials
+  router.put('/api/settings/ebay', (req, res) => {
+    const { app_id, cert_id } = req.body;
+    if (!app_id || !cert_id) {
+      return res.status(400).json({ detail: 'app_id and cert_id are required' });
+    }
+    setMeta(db, 'ebay_app_id', app_id.trim());
+    setMeta(db, 'ebay_cert_id', cert_id.trim());
+    res.json({ saved: true });
+  });
+
+  // GET /api/settings/ebay — get saved eBay credentials (masked)
+  router.get('/api/settings/ebay', (req, res) => {
+    const appId = getMeta(db, 'ebay_app_id') || '';
+    const certId = getMeta(db, 'ebay_cert_id') || '';
+    res.json({
+      app_id: appId ? appId.slice(0, 8) + '...' + appId.slice(-4) : '',
+      cert_id: certId ? certId.slice(0, 4) + '...' + certId.slice(-4) : '',
+      configured: !!(appId && certId),
+    });
+  });
+
+  // POST /api/settings/ebay/test — validate credentials against eBay OAuth
+  router.post('/api/settings/ebay/test', async (req, res) => {
+    const appId = getMeta(db, 'ebay_app_id');
+    const certId = getMeta(db, 'ebay_cert_id');
+    if (!appId || !certId) {
+      return res.status(400).json({ valid: false, error: 'No credentials configured' });
+    }
+
+    try {
+      const credentials = Buffer.from(`${appId}:${certId}`).toString('base64');
+      const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${credentials}`,
+        },
+        body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope',
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (response.ok) {
+        res.json({ valid: true });
+      } else {
+        const data = await response.json().catch(() => ({}));
+        res.json({ valid: false, error: data.error_description || `HTTP ${response.status}` });
+      }
+    } catch (err) {
+      res.json({ valid: false, error: err.message });
+    }
+  });
+
+  // GET /api/settings/analytics — get analytics opt-in status
+  router.get('/api/settings/analytics', (req, res) => {
+    const enabled = getMeta(db, 'analytics_enabled');
+    res.json({ enabled: enabled !== '0' }); // default ON
+  });
+
+  // PUT /api/settings/analytics — toggle analytics opt-in
+  router.put('/api/settings/analytics', (req, res) => {
+    const { enabled } = req.body;
+    setMeta(db, 'analytics_enabled', enabled ? '1' : '0');
+    res.json({ enabled: !!enabled });
+  });
+
+  // GET /api/cardvision-status — check if CardVision DB exists on this machine
+  router.get('/api/cardvision-status', (req, res) => {
+    const cvPath = require('path').join(
+      process.env.LOCALAPPDATA || '', 'CardVision', 'CardVision', 'cardvision.db'
+    );
+    res.json({ exists: require('fs').existsSync(cvPath) });
   });
 
   // ============================================================
