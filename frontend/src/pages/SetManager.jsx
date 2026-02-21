@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Trash2, Upload, Mic, ExternalLink, Database, Loader2, ChevronDown, ChevronRight, LayoutGrid, List } from 'lucide-react';
+import { Plus, Trash2, Upload, Mic, ExternalLink, Database, Loader2, ChevronDown, ChevronRight, LayoutGrid, List, MoreHorizontal } from 'lucide-react';
 import axios from 'axios';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -11,9 +11,27 @@ export default function SetManager() {
   const [migrating, setMigrating] = useState(false);
   const [collapsedYears, setCollapsedYears] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   useEffect(() => {
     loadSets();
+
+    // Listen for Electron menu actions
+    const handleImportCSV = () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.csv,.txt';
+      input.onchange = handleFileImport;
+      input.click();
+    };
+    const handleImportCV = () => migrateFromCardVision();
+
+    window.addEventListener('menu-import-csv', handleImportCSV);
+    window.addEventListener('menu-import-cardvision', handleImportCV);
+    return () => {
+      window.removeEventListener('menu-import-csv', handleImportCSV);
+      window.removeEventListener('menu-import-cardvision', handleImportCV);
+    };
   }, []);
 
   const loadSets = () => {
@@ -147,6 +165,15 @@ export default function SetManager() {
           <h2 className="text-2xl font-display font-bold text-cv-text">My Sets</h2>
           <p className="text-sm text-cv-muted mt-1">
             {sets.length} set{sets.length !== 1 ? 's' : ''} · {totalCards.toLocaleString()} cards · {totalOwned.toLocaleString()} owned
+            <span className="mx-2 text-cv-border">|</span>
+            <a
+              href="https://github.com/JCHanratty/CardVoice/issues/new?template=set-request.yml"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-cv-gold hover:underline"
+            >
+              Request a Set
+            </a>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -166,11 +193,14 @@ export default function SetManager() {
               <List size={16} />
             </button>
           </div>
-          <button onClick={migrateFromCardVision} disabled={migrating}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cv-gold/10 border border-cv-gold/30 text-cv-gold hover:bg-cv-gold/20 disabled:opacity-50 transition-all">
-            {migrating ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-            {migrating ? 'Migrating...' : 'Import from CardVision'}
-          </button>
+          {/* Show prominent CardVision button only when no sets exist */}
+          {sets.length === 0 && (
+            <button onClick={migrateFromCardVision} disabled={migrating}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cv-gold/10 border border-cv-gold/30 text-cv-gold hover:bg-cv-gold/20 disabled:opacity-50 transition-all">
+              {migrating ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+              {migrating ? 'Migrating...' : 'Import from CardVision'}
+            </button>
+          )}
           <label className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-white/5 border border-cv-border text-cv-text hover:bg-white/10 cursor-pointer transition-all">
             <Upload size={14} />
             Import CSV
@@ -180,6 +210,33 @@ export default function SetManager() {
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 transition-all">
             <Plus size={14} /> New Set
           </Link>
+          {/* More menu with re-import option when sets exist */}
+          {sets.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setShowMoreMenu(!showMoreMenu)}
+                className="p-2 rounded-lg bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+                title="More actions"
+              >
+                <MoreHorizontal size={16} />
+              </button>
+              {showMoreMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-50 bg-cv-panel border border-cv-border/50 rounded-lg shadow-xl min-w-[200px] py-1">
+                    <button
+                      onClick={() => { setShowMoreMenu(false); migrateFromCardVision(); }}
+                      disabled={migrating}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-cv-gold hover:bg-cv-gold/10 transition-all text-left disabled:opacity-50"
+                    >
+                      {migrating ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                      {migrating ? 'Migrating...' : 'Re-import from CardVision'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

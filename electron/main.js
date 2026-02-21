@@ -160,13 +160,26 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
+          label: 'Request a Set',
+          click: () => shell.openExternal('https://github.com/JCHanratty/CardVoice/issues/new?template=set-request.yml'),
+        },
+        {
+          label: 'Submit a Checklist',
+          click: () => shell.openExternal('https://github.com/JCHanratty/CardVoice/issues/new?template=checklist-submission.yml'),
+        },
+        {
+          label: 'Report a Bug',
+          click: () => shell.openExternal('https://github.com/JCHanratty/CardVoice/issues/new?template=bug-report.yml'),
+        },
+        { type: 'separator' },
+        {
           label: 'About CardVoice',
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'About CardVoice',
               message: 'CardVoice',
-              detail: `Version ${app.getVersion()}\n\nCard collection management with voice entry, checklist import, and price tracking.`,
+              detail: `Version ${app.getVersion()}\n\nCard collection management with voice entry, checklist import, and price tracking.\n\nSupport: buymeacoffee.com/jchanratty`,
               buttons: ['OK'],
             });
           },
