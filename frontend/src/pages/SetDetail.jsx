@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Trash2, Pencil, Check, X, Download, Search, Upload, Mic, ChevronUp, ChevronDown, ToggleLeft, ToggleRight } from 'lucide-react';
+import { ArrowLeft, Trash2, Pencil, Check, X, Download, Search, Upload, Mic, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, CheckSquare, Square, Layers } from 'lucide-react';
 import axios from 'axios';
 import ChecklistWizardModal from '../components/ChecklistWizardModal';
 import EditSectionsModal from '../components/EditSectionsModal';
@@ -73,6 +73,14 @@ export default function SetDetail() {
     loadMetadata();
     loadValuation();
 
+    // Listen for Electron menu export actions
+    const handleExportCSV = () => exportCSV();
+    const handleExportExcel = () => {
+      window.open(`${API}/api/sets/${setId}/export/excel`, '_blank');
+    };
+    window.addEventListener('menu-export-csv', handleExportCSV);
+    window.addEventListener('menu-export-excel', handleExportExcel);
+
     axios.get(`${API}/api/tracked-cards`).then(r => {
       const map = {};
       r.data.filter(tc => tc.set_id === parseInt(setId)).forEach(tc => {
@@ -89,6 +97,11 @@ export default function SetDetail() {
     axios.get(`${API}/api/sets/${setId}/card-prices`).then(r => {
       setCardPrices(r.data);
     }).catch(() => {});
+
+    return () => {
+      window.removeEventListener('menu-export-csv', handleExportCSV);
+      window.removeEventListener('menu-export-excel', handleExportExcel);
+    };
   }, [setId]);
 
   const deleteCard = async (cardId) => {
@@ -196,6 +209,48 @@ export default function SetDetail() {
     await axios.put(`${API}/api/insert-types/${itId}/pricing`, { search_query_override: insertQueryText });
     setEditingInsertQuery(null);
     loadMetadata();
+  };
+
+  const [bulkMessage, setBulkMessage] = useState(null);
+
+  // Bulk ownership: own all / clear all for current filter scope
+  const bulkSetQty = async (qty) => {
+    const scope = hasMetadata && activeInsertType ? activeInsertType : 'all cards';
+    const parallelScope = hasMetadata ? (activeParallel || 'Base') : '';
+    const count = filtered.length;
+
+    if (qty === 0 && !window.confirm(`Clear ownership for ${count} ${scope} cards? This sets qty to 0.`)) return;
+    if (qty === 1 && !window.confirm(`Mark all ${count} ${scope}${parallelScope ? ` / ${parallelScope}` : ''} cards as owned (qty=1)?`)) return;
+
+    try {
+      const payload = { qty };
+      if (hasMetadata && activeInsertType) payload.insert_type = activeInsertType;
+      if (hasMetadata && activeParallel !== undefined) payload.parallel = activeParallel;
+
+      const res = await axios.put(`${API}/api/sets/${setId}/bulk-qty`, payload);
+      await loadSet();
+
+      const action = qty > 0 ? 'owned' : 'cleared';
+      setBulkMessage(`${res.data.updated} cards ${action}. ${qty > 0 ? 'Remove any you don\'t have.' : ''}`);
+      if (qty > 0) setFilter('have');
+      setTimeout(() => setBulkMessage(null), 6000);
+    } catch (err) {
+      alert('Bulk update failed: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  // Bulk own/clear for a specific group (insert_type + parallel combo)
+  const bulkSetGroupQty = async (insertType, parallel, qty) => {
+    try {
+      const payload = { qty, insert_type: insertType, parallel: parallel };
+      const res = await axios.put(`${API}/api/sets/${setId}/bulk-qty`, payload);
+      await loadSet();
+      const action = qty > 0 ? 'owned' : 'cleared';
+      setBulkMessage(`${res.data.updated} ${insertType}${parallel ? ` / ${parallel}` : ''} cards ${action}.`);
+      setTimeout(() => setBulkMessage(null), 4000);
+    } catch (err) {
+      console.error('Group bulk update failed:', err);
+    }
   };
 
   const hasMetadata = metadata.insertTypes.length > 0;
@@ -541,16 +596,20 @@ export default function SetDetail() {
             className="w-full bg-cv-panel border border-cv-border/50 rounded-lg pl-9 pr-4 py-2 text-sm text-cv-text placeholder:text-cv-muted/50 focus:border-cv-accent focus:outline-none transition-colors" />
         </div>
         <div className="flex gap-1">
-          {['all', 'have', 'need'].map(f => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium capitalize transition-all ${
-                filter === f
-                  ? f === 'have' ? 'bg-cv-accent/15 text-cv-accent border border-cv-accent/25'
-                  : f === 'need' ? 'bg-cv-gold/15 text-cv-gold border border-cv-gold/25'
+          {[
+            { key: 'all', label: `All (${totalCards})` },
+            { key: 'have', label: `Have (${haveCount})` },
+            { key: 'need', label: `Need (${totalCards - haveCount})` },
+          ].map(f => (
+            <button key={f.key} onClick={() => setFilter(f.key)}
+              className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                filter === f.key
+                  ? f.key === 'have' ? 'bg-cv-accent/15 text-cv-accent border border-cv-accent/25'
+                  : f.key === 'need' ? 'bg-cv-gold/15 text-cv-gold border border-cv-gold/25'
                   : 'bg-cv-accent2/15 text-cv-accent2 border border-cv-accent2/25'
                   : 'bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10'
               }`}>
-              {f}
+              {f.label}
             </button>
           ))}
         </div>
@@ -584,6 +643,42 @@ export default function SetDetail() {
               ))}
             </select>
           </div>
+        </div>
+      )}
+
+      {/* Bulk Ownership Actions */}
+      {totalCards > 0 && (
+        <div className="bg-cv-panel/60 rounded-xl border border-cv-border/50 p-3 mb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers size={14} className="text-cv-accent" />
+              <span className="text-xs text-cv-muted uppercase tracking-wider font-semibold">Bulk Ownership</span>
+              {hasMetadata && activeInsertType && (
+                <span className="text-xs bg-cv-accent/10 text-cv-accent border border-cv-accent/20 rounded px-2 py-0.5">
+                  {activeInsertType}{activeParallel ? ` / ${activeParallel}` : ''}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => bulkSetQty(1)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cv-accent/15 text-cv-accent border border-cv-accent/25 hover:bg-cv-accent/25 transition-all"
+              >
+                <CheckSquare size={13} /> Own All Shown
+              </button>
+              <button
+                onClick={() => bulkSetQty(0)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+              >
+                <Square size={13} /> Clear All Shown
+              </button>
+            </div>
+          </div>
+          {bulkMessage && (
+            <div className="mt-2 px-3 py-2 rounded-lg bg-cv-accent/10 border border-cv-accent/20 text-xs text-cv-accent font-medium animate-fadeIn">
+              {bulkMessage}
+            </div>
+          )}
         </div>
       )}
 
@@ -646,12 +741,32 @@ export default function SetDetail() {
                 || (next.parallel || '') !== (card.parallel || '');
               const groupKey = `${card.insert_type || 'Base'}||${card.parallel || ''}`;
               const stats = groupStats[groupKey] || { cards: 0, qty: 0, have: 0 };
+              const allGroupOwned = stats.have === stats.cards && stats.cards > 0;
               const groupHeader = newParallel ? (
                 <tr key={`grp-${idx}`} className="bg-cv-accent/[0.03]">
                   <td colSpan="10" className="px-3 py-1.5 text-xs font-semibold">
-                    <span className="text-cv-accent">{card.insert_type || 'Base'}</span>
-                    {card.parallel && <><span className="text-cv-muted mx-1.5">/</span><span className="text-cv-gold">{card.parallel}</span></>}
-                    {!card.parallel && <span className="text-cv-muted ml-1.5">-- base</span>}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-cv-accent">{card.insert_type || 'Base'}</span>
+                        {card.parallel && <><span className="text-cv-muted mx-1.5">/</span><span className="text-cv-gold">{card.parallel}</span></>}
+                        {!card.parallel && <span className="text-cv-muted ml-1.5">-- base</span>}
+                        <span className="text-cv-muted ml-2">({stats.have}/{stats.cards})</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => bulkSetGroupQty(card.insert_type || 'Base', card.parallel || '', allGroupOwned ? 0 : 1)}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
+                            allGroupOwned
+                              ? 'bg-cv-accent/15 text-cv-accent border border-cv-accent/25 hover:bg-cv-accent/25'
+                              : 'bg-white/5 text-cv-muted border border-cv-border/30 hover:text-cv-accent hover:border-cv-accent/30'
+                          }`}
+                          title={allGroupOwned ? 'Clear all in group' : 'Own all in group'}
+                        >
+                          {allGroupOwned ? <CheckSquare size={10} /> : <Square size={10} />}
+                          {allGroupOwned ? 'All Owned' : 'Own All'}
+                        </button>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               ) : null;
