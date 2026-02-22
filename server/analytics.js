@@ -30,7 +30,7 @@ async function sendHeartbeat(db) {
   const catalogVersion = getMeta(db, 'catalog_version') || 'unknown';
 
   const payload = {
-    app_version: process.env.npm_package_version || 'dev',
+    app_version: process.env.APP_VERSION || process.env.npm_package_version || 'dev',
     os: process.platform,
     set_count: setCount,
     card_count: cardCount,

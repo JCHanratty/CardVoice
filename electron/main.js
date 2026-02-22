@@ -38,6 +38,7 @@ function startBackend() {
   }
 
   process.env.ELECTRON_IS_PACKAGED = app.isPackaged ? 'true' : 'false';
+  process.env.APP_VERSION = app.getVersion();
 
   const { createServer } = require(path.join(serverDir, 'index.js'));
   serverHandle = createServer({ port: BACKEND_PORT });

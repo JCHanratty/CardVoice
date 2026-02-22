@@ -8,6 +8,21 @@ const fs = require('fs');
 const { backupDb, getMeta, setMeta } = require('./db');
 
 /**
+ * Compare dot-separated version strings numerically.
+ * Returns true if `a` is newer than `b`.
+ */
+function versionIsNewer(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const av = pa[i] || 0, bv = pb[i] || 0;
+    if (av > bv) return true;
+    if (av < bv) return false;
+  }
+  return false;
+}
+
+/**
  * Resolve the catalog DB path (packaged vs dev).
  */
 function getCatalogPath(isPackaged) {
@@ -53,7 +68,7 @@ function mergeCatalog(db, opts = {}) {
     const catalogVersion = catalogVersionRow ? catalogVersionRow.value : '0';
     const userVersion = getMeta(db, 'catalog_version') || '0';
 
-    if (catalogVersion <= userVersion) {
+    if (!versionIsNewer(catalogVersion, userVersion)) {
       catalogDb.close();
       return { skipped: true, reason: `Already up to date (user: ${userVersion}, catalog: ${catalogVersion})` };
     }

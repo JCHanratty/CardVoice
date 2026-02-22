@@ -38,10 +38,6 @@ export default function Settings() {
     axios.get(`${API}/api/tracked-cards`).then(r => setTrackedCards(r.data)).catch(() => {});
     axios.get(`${API}/api/settings/ebay`).then(r => {
       setEbayConfigured(r.data.configured);
-      if (r.data.configured) {
-        setEbayAppId(r.data.app_id);
-        setEbayCertId(r.data.cert_id);
-      }
     }).catch(() => {});
     axios.get(`${API}/api/settings/analytics`).then(r => {
       setAnalyticsEnabled(r.data.enabled);
@@ -301,7 +297,7 @@ export default function Settings() {
               type="text"
               value={ebayAppId}
               onChange={e => setEbayAppId(e.target.value)}
-              placeholder="YourApp-Baseball-PRD-..."
+              placeholder={ebayConfigured ? "Configured — enter new value to replace" : "YourApp-Baseball-PRD-..."}
               className="w-full bg-cv-dark border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text placeholder:text-cv-muted/50 focus:border-cv-accent focus:outline-none"
             />
           </div>
@@ -311,7 +307,7 @@ export default function Settings() {
               type="password"
               value={ebayCertId}
               onChange={e => setEbayCertId(e.target.value)}
-              placeholder="PRD-..."
+              placeholder={ebayConfigured ? "Configured — enter new value to replace" : "PRD-..."}
               className="w-full bg-cv-dark border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text placeholder:text-cv-muted/50 focus:border-cv-accent focus:outline-none"
             />
           </div>
@@ -348,9 +344,10 @@ export default function Settings() {
             </p>
           </div>
           <button onClick={toggleAnalytics} className="ml-4 flex-shrink-0">
-            <div className={`w-12 h-6 rounded-full transition-colors flex items-center px-0.5 ${analyticsEnabled ? 'bg-cv-accent' : 'bg-cv-border'}`}>
-              <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${analyticsEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
-            </div>
+            {analyticsEnabled
+              ? <ToggleRight className="text-cv-accent" size={32} />
+              : <ToggleLeft className="text-cv-muted" size={32} />
+            }
           </button>
         </div>
       </div>
