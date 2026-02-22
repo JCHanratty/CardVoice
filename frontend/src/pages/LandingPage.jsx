@@ -1,9 +1,27 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Mic, Database, ArrowRight, Shield, Zap, BarChart3 } from 'lucide-react';
+import { Mic, ArrowRight, Zap } from 'lucide-react';
 import Logo from '../components/Logo';
 
+function fmtDateLong(d) {
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 export default function LandingPage() {
+  const [releases, setReleases] = useState([]);
+  const [appVersion, setAppVersion] = useState(null);
+
+  useEffect(() => {
+    fetch('https://api.github.com/repos/JCHanratty/CardVoice/releases?per_page=3')
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setReleases(data); })
+      .catch(() => {});
+
+    if (window.electronAPI?.getAppVersion) {
+      window.electronAPI.getAppVersion().then(v => setAppVersion(v)).catch(() => {});
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-cv-dark flex flex-col">
       {/* Accent bar */}
@@ -54,40 +72,34 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* Features Row */}
-      <div className="px-6 pb-20">
-        <div className="max-w-4xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <div className="text-center group">
-            <div className="w-14 h-14 rounded-2xl bg-cv-accent/10 border border-cv-accent/20 flex items-center justify-center mx-auto mb-4 group-hover:bg-cv-accent/20 group-hover:border-cv-accent/40 transition-all duration-300">
-              <Mic size={24} className="text-cv-accent" />
+      {/* What's New */}
+      {releases.length > 0 && (
+        <div className="px-6 pb-16">
+          <div className="max-w-2xl mx-auto">
+            <h2 className="text-sm font-semibold text-cv-muted uppercase tracking-widest mb-4 text-center font-display flex items-center justify-center gap-2">
+              <Zap size={14} className="text-cv-gold" />
+              What's New
+              {appVersion && <span className="text-[0.7rem] font-mono text-cv-muted/60 ml-2">v{appVersion}</span>}
+            </h2>
+            <div className="space-y-3">
+              {releases.slice(0, 3).map(release => (
+                <div key={release.id} className="p-4 rounded-xl bg-cv-panel/40 border border-cv-border/30">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-cv-gold font-mono text-sm font-bold">{release.tag_name}</span>
+                    <span className="text-cv-muted text-xs">
+                      {fmtDateLong(release.published_at)}
+                    </span>
+                  </div>
+                  <p className="text-cv-text text-sm leading-relaxed whitespace-pre-wrap">
+                    {(release.body || 'No release notes.').slice(0, 300)}
+                    {(release.body || '').length > 300 ? '...' : ''}
+                  </p>
+                </div>
+              ))}
             </div>
-            <h3 className="font-display text-cv-text font-semibold text-base mb-2">Voice Logging</h3>
-            <p className="text-xs text-cv-muted leading-relaxed">
-              Say card numbers out loud. Voice recognition logs them instantly with smart context inference.
-            </p>
-          </div>
-
-          <div className="text-center group">
-            <div className="w-14 h-14 rounded-2xl bg-cv-gold/10 border border-cv-gold/20 flex items-center justify-center mx-auto mb-4 group-hover:bg-cv-gold/20 group-hover:border-cv-gold/40 transition-all duration-300">
-              <BarChart3 size={24} className="text-cv-gold" />
-            </div>
-            <h3 className="font-display text-cv-text font-semibold text-base mb-2">Price Tracking</h3>
-            <p className="text-xs text-cv-muted leading-relaxed">
-              Track portfolio value with eBay price data. Set-level and per-card pricing with historical charts.
-            </p>
-          </div>
-
-          <div className="text-center group">
-            <div className="w-14 h-14 rounded-2xl bg-cv-accent2/10 border border-cv-accent2/20 flex items-center justify-center mx-auto mb-4 group-hover:bg-cv-accent2/20 group-hover:border-cv-accent2/40 transition-all duration-300">
-              <Database size={24} className="text-cv-accent2" />
-            </div>
-            <h3 className="font-display text-cv-text font-semibold text-base mb-2">Full Checklists</h3>
-            <p className="text-xs text-cv-muted leading-relaxed">
-              Paste Beckett checklists with auto-parsing. Sections, parallels, and card counts detected automatically.
-            </p>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

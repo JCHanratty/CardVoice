@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Mic, Plus, Clock, Zap, Target, Database, ChevronRight,
-  TrendingUp, TrendingDown, BarChart3, ArrowUpRight, Layers,
-  Trophy, Activity
+  Mic, Plus, Clock, Target, Database, ChevronRight,
+  TrendingUp, TrendingDown, BarChart3, ArrowUpRight,
+  Layers, Trophy, Activity
 } from 'lucide-react';
 import axios from 'axios';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import Logo from '../components/Logo';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -14,7 +15,6 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 function fmtNum(n) { return (n || 0).toLocaleString(); }
 function fmtDollar(n) { return `$${(n || 0).toFixed(2)}`; }
 function fmtDate(d) { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
-function fmtDateLong(d) { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
 
 /* ── Stat Tile ── */
 function StatTile({ label, value, sub, icon: Icon, accent = 'cv-accent', delay = 0 }) {
@@ -67,7 +67,6 @@ export default function Dashboard() {
   const [portfolio, setPortfolio] = useState(null);
   const [priceChanges, setPriceChanges] = useState([]);
   const [recentSets, setRecentSets] = useState([]);
-  const [releases, setReleases] = useState([]);
   const [appVersion, setAppVersion] = useState(null);
 
   useEffect(() => {
@@ -77,11 +76,6 @@ export default function Dashboard() {
     axios.get(`${API}/api/portfolio`).then(r => setPortfolio(r.data)).catch(() => {});
     axios.get(`${API}/api/portfolio/changes`).then(r => setPriceChanges(r.data)).catch(() => {});
     axios.get(`${API}/api/sets/recent?limit=5`).then(r => setRecentSets(r.data)).catch(() => {});
-
-    fetch('https://api.github.com/repos/JCHanratty/CardVoice/releases?per_page=3')
-      .then(r => r.json())
-      .then(data => { if (Array.isArray(data)) setReleases(data); })
-      .catch(() => {});
 
     if (window.electronAPI?.getAppVersion) {
       window.electronAPI.getAppVersion().then(v => setAppVersion(v)).catch(() => {});
@@ -120,10 +114,13 @@ export default function Dashboard() {
     <div className="w-full fade-in-up">
 
       {/* ═══ HEADER ═══ */}
-      <div className="flex items-end justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-cv-text tracking-tight">{greeting}</h1>
-          <p className="text-sm text-cv-muted mt-0.5">{today}</p>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <Logo size={40} />
+          <div>
+            <h1 className="text-2xl font-display font-bold text-cv-text tracking-tight">{greeting}</h1>
+            <p className="text-sm text-cv-muted mt-0.5">{today}</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Link to="/voice"
@@ -390,82 +387,51 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ═══ BOTTOM ROW ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-
-        {/* Recent Sessions */}
-        {recentSessions.length > 0 && (
-          <Panel className="overflow-hidden">
-            <SectionHeader icon={Clock}>Recent Sessions</SectionHeader>
-            <div className="-mx-5 -mb-5">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-cv-border/30">
-                    <th className="text-left px-5 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Date</th>
-                    <th className="text-left px-3 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Set</th>
-                    <th className="text-center px-3 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Cards</th>
-                    <th className="text-center px-3 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Speed</th>
-                    <th className="text-center px-5 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Acc.</th>
+      {/* ═══ RECENT SESSIONS ═══ */}
+      {recentSessions.length > 0 && (
+        <Panel className="overflow-hidden mb-6">
+          <SectionHeader icon={Clock}>Recent Sessions</SectionHeader>
+          <div className="-mx-5 -mb-5">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-cv-border/30">
+                  <th className="text-left px-5 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Date</th>
+                  <th className="text-left px-3 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Set</th>
+                  <th className="text-center px-3 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Cards</th>
+                  <th className="text-center px-3 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Speed</th>
+                  <th className="text-center px-5 py-2.5 text-[0.7rem] text-cv-muted uppercase tracking-wider font-semibold">Acc.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentSessions.slice(0, 5).map(session => (
+                  <tr key={session.id} className="border-b border-cv-border/15 hover:bg-white/[0.02] transition-colors">
+                    <td className="px-5 py-2.5 text-cv-muted text-[0.85rem]">
+                      {fmtDate(session.timestamp)}
+                    </td>
+                    <td className="px-3 py-2.5 text-cv-text font-medium text-[0.85rem] truncate max-w-[150px]">
+                      {session.set_name || 'Unknown'}
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-cv-accent font-mono font-semibold text-[0.85rem]">
+                      {session.total_cards}
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-cv-text font-mono text-[0.85rem]">
+                      {session.cards_per_min}/m
+                    </td>
+                    <td className="px-5 py-2.5 text-center">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-[0.75rem] font-mono font-bold ${
+                        session.accuracy_pct >= 90 ? 'bg-cv-accent/15 text-cv-accent' :
+                        session.accuracy_pct >= 70 ? 'bg-cv-gold/15 text-cv-gold' : 'bg-red-500/15 text-red-400'
+                      }`}>
+                        {session.accuracy_pct}%
+                      </span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {recentSessions.slice(0, 5).map(session => (
-                    <tr key={session.id} className="border-b border-cv-border/15 hover:bg-white/[0.02] transition-colors">
-                      <td className="px-5 py-2.5 text-cv-muted text-[0.85rem]">
-                        {fmtDate(session.timestamp)}
-                      </td>
-                      <td className="px-3 py-2.5 text-cv-text font-medium text-[0.85rem] truncate max-w-[150px]">
-                        {session.set_name || 'Unknown'}
-                      </td>
-                      <td className="px-3 py-2.5 text-center text-cv-accent font-mono font-semibold text-[0.85rem]">
-                        {session.total_cards}
-                      </td>
-                      <td className="px-3 py-2.5 text-center text-cv-text font-mono text-[0.85rem]">
-                        {session.cards_per_min}/m
-                      </td>
-                      <td className="px-5 py-2.5 text-center">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[0.75rem] font-mono font-bold ${
-                          session.accuracy_pct >= 90 ? 'bg-cv-accent/15 text-cv-accent' :
-                          session.accuracy_pct >= 70 ? 'bg-cv-gold/15 text-cv-gold' : 'bg-red-500/15 text-red-400'
-                        }`}>
-                          {session.accuracy_pct}%
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-        )}
-
-        {/* What's New */}
-        {releases.length > 0 && (
-          <Panel>
-            <SectionHeader icon={Zap} right={
-              appVersion && <span className="text-[0.7rem] font-mono text-cv-muted">v{appVersion}</span>
-            }>
-              What's New
-            </SectionHeader>
-            <div className="space-y-3">
-              {releases.slice(0, 2).map(release => (
-                <div key={release.id} className="pb-3 border-b border-cv-border/15 last:border-0 last:pb-0">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-cv-gold font-mono text-[0.8rem] font-bold">{release.tag_name}</span>
-                    <span className="text-cv-muted text-[0.7rem]">
-                      {fmtDateLong(release.published_at)}
-                    </span>
-                  </div>
-                  <p className="text-cv-text text-[0.85rem] leading-relaxed whitespace-pre-wrap">
-                    {(release.body || 'No release notes.').slice(0, 200)}
-                    {(release.body || '').length > 200 ? '...' : ''}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </Panel>
-        )}
-      </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 {
   "name": "cardvoice",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Voice-powered sports card collection manager",
   "main": "main.js",
   "scripts": {
@@ -42,6 +42,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
       "installerIcon": "icon.ico",
       "uninstallerIcon": "icon.ico",
       "installerHeaderIcon": "icon.ico",
