@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+output/
+checkpoint.json
+my_sets.json
+qty_updates.json
+scraper.log
+migrator.log
+errors.log
+test_*.db
+fixtures/
+sample_*.html
