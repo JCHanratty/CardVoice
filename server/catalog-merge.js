@@ -92,8 +92,8 @@ function mergeCatalog(db, opts = {}) {
     const findSetByNameNullYear = db.prepare('SELECT id FROM card_sets WHERE name = ? AND year IS NULL');
     const createSet = db.prepare('INSERT INTO card_sets (name, year, brand, sport, total_cards) VALUES (?, ?, ?, ?, 0)');
     const findCard = db.prepare('SELECT id, qty FROM cards WHERE set_id = ? AND card_number = ? AND insert_type = ? AND parallel = ?');
-    const insertCard = db.prepare('INSERT INTO cards (set_id, card_number, player, team, rc_sp, insert_type, parallel, qty) VALUES (?, ?, ?, ?, ?, ?, ?, 0)');
-    const updateCardMeta = db.prepare('UPDATE cards SET player = ?, team = ?, rc_sp = ? WHERE id = ?');
+    const insertCard = db.prepare('INSERT INTO cards (set_id, card_number, player, team, rc_sp, insert_type, parallel, qty, image_path) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)');
+    const updateCardMeta = db.prepare('UPDATE cards SET player = ?, team = ?, rc_sp = ?, image_path = CASE WHEN ? != \'\' THEN ? ELSE image_path END WHERE id = ?');
     const upsertInsertType = db.prepare(`
       INSERT INTO set_insert_types (set_id, name, card_count, odds, section_type)
       VALUES (?, ?, ?, ?, ?)
@@ -154,10 +154,11 @@ function mergeCatalog(db, opts = {}) {
         for (const card of catCards) {
           const existingCard = findCard.get(userSetId, card.card_number, card.insert_type, card.parallel);
           if (existingCard) {
-            updateCardMeta.run(card.player, card.team, card.rc_sp, existingCard.id);
+            const imgPath = card.image_path || '';
+            updateCardMeta.run(card.player, card.team, card.rc_sp, imgPath, imgPath, existingCard.id);
             results.cards.updated++;
           } else {
-            insertCard.run(userSetId, card.card_number, card.player, card.team, card.rc_sp, card.insert_type, card.parallel);
+            insertCard.run(userSetId, card.card_number, card.player, card.team, card.rc_sp, card.insert_type, card.parallel, card.image_path || '');
             results.cards.added++;
           }
         }

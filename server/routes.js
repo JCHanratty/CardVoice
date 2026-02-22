@@ -79,7 +79,7 @@ function createRoutes(db) {
     if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
 
     const cards = db.prepare(
-      `SELECT id, card_number, player, team, rc_sp, insert_type, parallel, qty
+      `SELECT id, card_number, player, team, rc_sp, insert_type, parallel, qty, image_path
        FROM cards WHERE set_id = ? ORDER BY card_number`
     ).all(setId);
 
@@ -596,6 +596,31 @@ function createRoutes(db) {
       insertTypes: insertTypesAdded,
       parallels: parallelsAdded,
     });
+  });
+
+  // POST /api/import-qty — bulk import qty from external source (e.g. TCDB scraper)
+  router.post('/api/import-qty', (req, res) => {
+    const { updates } = req.body;
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({ detail: 'updates array required' });
+    }
+    const findCard = db.prepare(
+      `SELECT id, qty FROM cards
+       WHERE set_id = (SELECT id FROM card_sets WHERE name = ? AND year = ?)
+       AND card_number = ? AND insert_type = ? AND parallel = ?`
+    );
+    const updateQty = db.prepare('UPDATE cards SET qty = ? WHERE id = ?');
+    let matched = 0, unmatched = 0;
+    const doImport = db.transaction(() => {
+      for (const u of updates) {
+        const card = findCard.get(u.set_name || '', u.year || null, u.card_number || '', u.insert_type || 'Base', u.parallel || '');
+        if (card) { updateQty.run(u.qty || 1, card.id); matched++; }
+        else { unmatched++; }
+      }
+    });
+    backupDb();
+    doImport();
+    res.json({ matched, unmatched, total: updates.length });
   });
 
   // GET /api/sets/:id/metadata — get set's available insert types + parallels (with pricing fields)

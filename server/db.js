@@ -86,7 +86,8 @@ function openDb(dbPath) {
       rc_sp       TEXT    DEFAULT '',
       insert_type TEXT    DEFAULT 'Base',
       parallel    TEXT    DEFAULT '',
-      qty         INTEGER DEFAULT 0
+      qty         INTEGER DEFAULT 0,
+      image_path  TEXT    DEFAULT ''
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS uq_card_variant
@@ -220,6 +221,14 @@ function openDb(dbPath) {
     'ALTER TABLE price_snapshots ADD COLUMN insert_type_id INTEGER REFERENCES set_insert_types(id) ON DELETE CASCADE',
   ];
   for (const sql of insertTypeFk) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+  }
+
+  // Migration: add image_path to cards
+  const imageCols = [
+    "ALTER TABLE cards ADD COLUMN image_path TEXT DEFAULT ''",
+  ];
+  for (const sql of imageCols) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
   }
 
