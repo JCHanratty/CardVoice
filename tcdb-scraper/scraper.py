@@ -546,6 +546,41 @@ def main():
         logger.info(f"Preview saved to {preview_path}")
         return
 
+    # --- Single set import mode ---
+    if args.set_id and args.preview is None and not args.list:
+        conn = create_catalog_db(str(DB_PATH))
+        sid = args.set_id
+
+        # Fetch set info from the ViewSet page
+        resp = client.get(f"{TCDB_BASE}/ViewSet.cfm/sid/{sid}")
+        detail = parse_set_detail_page(resp.text)
+        raw_title = detail.get("title", "")
+        set_name = raw_title.split(" - Trading Card")[0].replace(" Baseball", "").strip()
+        if not set_name:
+            set_name = f"Set-{sid}"
+        slug = set_name.replace(" ", "-")
+
+        set_info = {
+            "tcdb_id": sid,
+            "name": set_name,
+            "url_slug": slug,
+            "year": args.year,
+        }
+
+        summary = scrape_set(client, conn, set_info, download_images=not args.no_images)
+
+        from datetime import date
+        version = date.today().strftime("%Y.%m.1")
+        set_catalog_version(conn, version)
+        conn.close()
+
+        if args.json:
+            print(json.dumps(summary))
+        else:
+            logger.info(f"Done! Scraped {summary['total_cards']} cards for {set_name}")
+
+        return
+
     conn = create_catalog_db(str(DB_PATH))
 
     if cp.get_sets():
