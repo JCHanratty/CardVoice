@@ -12,6 +12,7 @@ Usage:
 """
 import os
 import sys
+import re
 import json
 import logging
 import argparse
@@ -204,6 +205,9 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
     sub_sets = discover_sub_sets(client, tcdb_id, parent_name=name)
     sub_set_summaries = []
 
+    # Build insert names list for parallel normalization
+    insert_names = [s["name"] for s in sub_sets if not _is_parallel(s["name"])]
+
     for sub in sub_sets:
         sub_tcdb_id = sub["tcdb_id"]
         sub_name = sub["name"]
@@ -213,7 +217,9 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
         is_parallel = _is_parallel(sub_name)
 
         if is_parallel:
-            upsert_parallel(conn, set_id=set_id, name=sub_name)
+            # Normalize: "Stars of MLB Red Foil" → "Red Foil"
+            normalized = _normalize_parallel_name(sub_name, insert_names)
+            upsert_parallel(conn, set_id=set_id, name=normalized)
         else:
             upsert_insert_type(conn, set_id=set_id, name=sub_name)
 
@@ -223,7 +229,7 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
             sub_cards = sub_result.get("cards", [])
 
             insert_type = "Base" if is_parallel else sub_name
-            parallel = sub_name if is_parallel else ""
+            parallel = normalized if is_parallel else ""
 
             sub_count = _process_cards(
                 client, conn, set_id, sub_tcdb_id, sub_cards,
@@ -323,6 +329,48 @@ def _is_parallel(name: str) -> bool:
     return any(kw in lower for kw in _PARALLEL_KEYWORDS)
 
 
+def _normalize_parallel_name(parallel_name: str, insert_names: list[str]) -> str:
+    """Strip insert/subset prefix from a parallel name to get the color/variant.
+
+    "Stars of MLB Red Foil" with insert "Stars of MLB" → "Red Foil"
+    "1991 Topps Baseball 35th Anniversary Black (Series One)" → "Black"
+    "Gold" → "Gold"
+    """
+    result = parallel_name.strip()
+
+    # Strip "(Series One)", "(Series Two)" etc.
+    result = re.sub(r'\s*\(Series\s+\w+\)\s*$', '', result).strip()
+
+    # Try to strip known insert names (longest first to avoid partial matches)
+    sorted_inserts = sorted(insert_names, key=len, reverse=True)
+    for insert_name in sorted_inserts:
+        if result.lower().startswith(insert_name.lower()):
+            stripped = result[len(insert_name):].strip()
+            if stripped:
+                result = stripped
+                break
+
+    # Strip common set-name prefixes that might remain (e.g., "Autographs Black" → "Black"
+    # is valid, but "Autographs" alone is not a color — only strip if a color keyword remains)
+    return result
+
+
+def _dedupe_parallels(parallels: list[dict], insert_names: list[str]) -> list[dict]:
+    """Normalize parallel names by stripping insert prefixes, then deduplicate.
+
+    Returns a list of unique parallels with normalized names.
+    """
+    seen = set()
+    deduped = []
+    for p in parallels:
+        normalized = _normalize_parallel_name(p["name"], insert_names)
+        lower_key = normalized.lower()
+        if lower_key not in seen:
+            seen.add(lower_key)
+            deduped.append({"tcdb_id": p["tcdb_id"], "name": normalized})
+    return deduped
+
+
 def list_sets_json(client: TcdbClient, year: int,
                     sport: str = "Baseball") -> list[dict]:
     """Fetch available sets for a year and return a JSON-serializable list.
@@ -365,6 +413,10 @@ def preview_set_json(client: TcdbClient, set_info: dict) -> dict:
             parallels.append(entry)
         else:
             inserts.append(entry)
+
+    # Normalize parallel names: strip insert prefixes and deduplicate
+    insert_names = [i["name"] for i in inserts]
+    parallels = _dedupe_parallels(parallels, insert_names)
 
     return {
         "tcdb_id": tcdb_id,
