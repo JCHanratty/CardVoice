@@ -83,7 +83,7 @@ function setupAutoUpdater() {
     console.error('Auto-update error:', err.message);
   });
 
-  autoUpdater.checkForUpdatesAndNotify();
+  autoUpdater.checkForUpdates();
 }
 
 // ============================================================
