@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createHashRouter, RouterProvider, Link, useLocation, useParams, Outlet, useNavigate } from 'react-router-dom';
-import { Mic, Database, HelpCircle, LayoutDashboard, ChevronRight, ChevronLeft, Settings as SettingsIcon, Home, PanelLeftClose, PanelLeft, DollarSign } from 'lucide-react';
+import { Mic, Database, HelpCircle, LayoutDashboard, ChevronRight, ChevronLeft, Settings as SettingsIcon, Home, PanelLeftClose, PanelLeft, DollarSign, Shield } from 'lucide-react';
 import axios from 'axios';
 import Dashboard from './pages/Dashboard';
 import VoiceEntry from './pages/VoiceEntry';
@@ -12,6 +12,7 @@ import Settings from './pages/Settings';
 import PriceHistory from './pages/PriceHistory';
 import LandingPage from './pages/LandingPage';
 import ValueDashboard from './pages/ValueDashboard';
+import AdminPage from './pages/AdminPage';
 import Logo from './components/Logo';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -82,6 +83,8 @@ function Breadcrumbs() {
     crumbs.push({ label: 'Value Dashboard', to: '/value' });
   } else if (path.startsWith('/settings')) {
     crumbs.push({ label: 'Settings', to: '/settings' });
+  } else if (path.startsWith('/admin')) {
+    crumbs.push({ label: 'Admin', to: '/admin' });
   }
 
   if (crumbs.length <= 1) return null;
@@ -199,6 +202,7 @@ function Layout() {
           <NavLink to="/value" icon={DollarSign} label="Value" collapsed={collapsed} />
           <NavLink to="/how-to" icon={HelpCircle} label="How To" collapsed={collapsed} />
           <NavLink to="/settings" icon={SettingsIcon} label="Settings" collapsed={collapsed} />
+          <NavLink to="/admin" icon={Shield} label="Admin" collapsed={collapsed} />
         </nav>
 
         {/* Support link */}
@@ -261,6 +265,7 @@ const router = createHashRouter([
       { path: '/how-to', element: <HowTo /> },
       { path: '/value', element: <ValueDashboard /> },
       { path: '/settings', element: <Settings /> },
+      { path: '/admin', element: <AdminPage /> },
       { path: '/cards/:cardId/prices', element: <PriceHistory /> },
     ],
   },
