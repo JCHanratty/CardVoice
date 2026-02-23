@@ -10,6 +10,9 @@ function fmtDateLong(d) {
 export default function LandingPage() {
   const [releases, setReleases] = useState([]);
   const [appVersion, setAppVersion] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateReady, setUpdateReady] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null);
 
   useEffect(() => {
     fetch('https://api.github.com/repos/JCHanratty/CardVoice/releases?per_page=3')
@@ -20,10 +23,66 @@ export default function LandingPage() {
     if (window.electronAPI?.getAppVersion) {
       window.electronAPI.getAppVersion().then(v => setAppVersion(v)).catch(() => {});
     }
+
+    if (window.electronAPI) {
+      window.electronAPI.onUpdateAvailable((info) => setUpdateInfo(info));
+      window.electronAPI.onDownloadProgress((progress) => setDownloadProgress(progress));
+      window.electronAPI.onUpdateDownloaded((info) => {
+        setUpdateInfo(info);
+        setUpdateReady(true);
+        setDownloadProgress(null);
+      });
+    }
   }, []);
 
   return (
     <div className="min-h-screen bg-cv-dark flex flex-col">
+      {/* Update Modal */}
+      {updateReady && updateInfo && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-cv-panel border border-cv-border rounded-2xl p-8 max-w-sm w-full mx-4 shadow-2xl">
+            <h2 className="text-xl font-display font-bold text-cv-text text-center mb-1">
+              CardVoice v{updateInfo.version}
+            </h2>
+            <p className="text-sm text-cv-muted text-center mb-6">
+              A new version has been downloaded and is ready to install.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => window.electronAPI?.quitAndInstall()}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 transition-all"
+              >
+                Restart Now
+              </button>
+              <button
+                onClick={() => setUpdateReady(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+              >
+                Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Download progress banner */}
+      {updateInfo && !updateReady && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-cv-panel/95 border-b border-cv-gold/30 backdrop-blur-sm">
+          <div className="px-4 py-2 flex items-center justify-between">
+            <span className="text-sm text-cv-gold font-medium">
+              Downloading CardVoice v{updateInfo.version}...
+            </span>
+            <span className="text-xs text-cv-muted font-mono">
+              {downloadProgress ? `${downloadProgress.percent}%` : 'Starting...'}
+            </span>
+          </div>
+          <div className="h-1 bg-cv-border/30">
+            <div
+              className="h-full bg-gradient-to-r from-cv-accent to-cv-gold transition-all duration-300"
+              style={{ width: `${downloadProgress?.percent || 0}%` }}
+            />
+          </div>
+        </div>
+      )}
       {/* Accent bar */}
       <div className="accent-bar" />
 
