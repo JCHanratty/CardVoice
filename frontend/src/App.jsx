@@ -111,14 +111,17 @@ function Layout() {
   const [collapsed, setCollapsed] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateReady, setUpdateReady] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (window.electronAPI) {
       window.electronAPI.onUpdateAvailable((info) => setUpdateInfo(info));
+      window.electronAPI.onDownloadProgress((progress) => setDownloadProgress(progress));
       window.electronAPI.onUpdateDownloaded((info) => {
         setUpdateInfo(info);
         setUpdateReady(true);
+        setDownloadProgress(null);
       });
       window.electronAPI.onMenuAction(({ action, payload }) => {
         switch (action) {
@@ -174,10 +177,23 @@ function Layout() {
           </div>
         </div>
       )}
-      {/* Downloading banner (non-modal, subtle) */}
+      {/* Download progress banner */}
       {updateInfo && !updateReady && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-cv-gold/15 border-b border-cv-gold/30 px-4 py-2 text-center text-sm text-cv-gold font-medium backdrop-blur-sm">
-          Downloading update v{updateInfo.version}...
+        <div className="fixed top-0 left-0 right-0 z-50 bg-cv-panel/95 border-b border-cv-gold/30 backdrop-blur-sm">
+          <div className="px-4 py-2 flex items-center justify-between">
+            <span className="text-sm text-cv-gold font-medium">
+              Downloading CardVoice v{updateInfo.version}...
+            </span>
+            <span className="text-xs text-cv-muted font-mono">
+              {downloadProgress ? `${downloadProgress.percent}%` : 'Starting...'}
+            </span>
+          </div>
+          <div className="h-1 bg-cv-border/30">
+            <div
+              className="h-full bg-gradient-to-r from-cv-accent to-cv-gold transition-all duration-300"
+              style={{ width: `${downloadProgress?.percent || 0}%` }}
+            />
+          </div>
         </div>
       )}
       {/* Sidebar */}

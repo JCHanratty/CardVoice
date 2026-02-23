@@ -7,6 +7,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('update-available');
     ipcRenderer.on('update-available', (_e, info) => callback(info));
   },
+  onDownloadProgress: (callback) => {
+    ipcRenderer.removeAllListeners('download-progress');
+    ipcRenderer.on('download-progress', (_e, progress) => callback(progress));
+  },
   onUpdateDownloaded: (callback) => {
     ipcRenderer.removeAllListeners('update-downloaded');
     ipcRenderer.on('update-downloaded', (_e, info) => callback(info));
