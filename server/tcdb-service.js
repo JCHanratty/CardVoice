@@ -4,12 +4,17 @@
  */
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 class TcdbService {
   constructor(opts = {}) {
     this.scraperDir = opts.scraperDir || path.join(__dirname, '..', 'tcdb-scraper');
+    this.outputDir = opts.outputDir || path.join(this.scraperDir, 'output');
     this.python = opts.python || 'python';
     this.db = opts.db || null;
+
+    // Ensure output directory exists and is writable
+    fs.mkdirSync(this.outputDir, { recursive: true });
 
     this._status = {
       running: false,
@@ -58,7 +63,7 @@ class TcdbService {
 
     try {
       // Step 1: Run the scraper to build catalog DB
-      const args = ['--set-id', String(setId), '--no-images', '--json'];
+      const args = ['--set-id', String(setId), '--no-images', '--json', '--output-dir', this.outputDir];
       if (year) args.push('--year', String(year));
       const scrapeResult = await this._runScraperRaw(args);
 
@@ -69,7 +74,7 @@ class TcdbService {
       let mergeResult = null;
       if (this.db) {
         const { mergeCatalog } = require('./catalog-merge');
-        const catalogPath = path.join(this.scraperDir, 'output', 'tcdb-catalog.db');
+        const catalogPath = path.join(this.outputDir, 'tcdb-catalog.db');
         mergeResult = mergeCatalog(this.db, { catalogPath });
       }
 

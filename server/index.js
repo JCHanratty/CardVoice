@@ -40,10 +40,18 @@ function createServer(opts = {}) {
 
   // Start TCDB scraper service
   const { TcdbService } = require('./tcdb-service');
-  const tcdbService = new TcdbService({
+  const tcdbOpts = {
     scraperDir: path.join(__dirname, '..', 'tcdb-scraper'),
     db,
-  });
+  };
+  // In packaged app, write scraper output to writable userData directory
+  if (isPackaged) {
+    const userDataDir = process.env.APPDATA
+      ? path.join(process.env.APPDATA, 'CardVoice')
+      : path.join(__dirname, '..', 'tcdb-scraper', 'output');
+    tcdbOpts.outputDir = path.join(userDataDir, 'tcdb-output');
+  }
+  const tcdbService = new TcdbService(tcdbOpts);
   app.locals.tcdbService = tcdbService;
 
   // Anonymous heartbeat (delayed, non-blocking)

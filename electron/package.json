@@ -1,6 +1,6 @@
 {
   "name": "cardvoice",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Voice-powered sports card collection manager",
   "main": "main.js",
   "scripts": {
@@ -33,6 +33,11 @@
       {
         "from": "resources/checklist-catalog.db",
         "to": "checklist-catalog.db"
+      },
+      {
+        "from": "../tcdb-scraper",
+        "to": "tcdb-scraper",
+        "filter": ["*.py", "requirements.txt", "!test_*", "!__pycache__/**", "!output/**", "!*.log"]
       }
     ],
     "win": {

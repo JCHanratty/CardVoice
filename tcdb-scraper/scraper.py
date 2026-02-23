@@ -447,7 +447,15 @@ def main():
                         help="TCDB set ID to operate on")
     parser.add_argument("--year", type=int, default=START_YEAR,
                         help=f"Year for --list mode (default: {START_YEAR})")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Override output directory (default: ./output)")
     args = parser.parse_args()
+
+    global OUTPUT_DIR, DB_PATH, IMAGES_DIR
+    if args.output_dir:
+        OUTPUT_DIR = Path(args.output_dir)
+        DB_PATH = OUTPUT_DIR / "tcdb-catalog.db"
+        IMAGES_DIR = OUTPUT_DIR / "images"
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
