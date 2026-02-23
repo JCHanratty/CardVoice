@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 output/
 checkpoint.json
+cookies.json
 my_sets.json
 qty_updates.json
 scraper.log

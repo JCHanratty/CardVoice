@@ -1,20 +1,19 @@
 """
 Rate-limited HTTP client for TCDB scraping.
+Uses cloudscraper to bypass Cloudflare challenges.
 Adds random delays, retries, and realistic headers.
 """
 import time
 import random
 import logging
-import requests
+import json
+import os
+import cloudscraper
 
 logger = logging.getLogger(__name__)
 
-# Realistic browser User-Agent
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
+# Path for persisting browser cookies between runs
+_COOKIE_FILE = os.path.join(os.path.dirname(__file__), "cookies.json")
 
 
 class TcdbClient:
@@ -32,13 +31,34 @@ class TcdbClient:
         self.timeout = timeout
         self._last_request_time = 0.0
 
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": _USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-        })
+        self.session = cloudscraper.create_scraper()
+        self._load_cookies()
+
+    def _load_cookies(self):
+        """Load saved cookies from disk if available."""
+        if os.path.exists(_COOKIE_FILE):
+            try:
+                with open(_COOKIE_FILE, "r") as f:
+                    cookies = json.load(f)
+                for c in cookies:
+                    self.session.cookies.set(c["name"], c["value"],
+                                             domain=c.get("domain", ""),
+                                             path=c.get("path", "/"))
+                logger.info(f"Loaded {len(cookies)} cookies from {_COOKIE_FILE}")
+            except Exception as e:
+                logger.warning(f"Could not load cookies: {e}")
+
+    def _save_cookies(self):
+        """Persist current session cookies to disk."""
+        cookies = []
+        for c in self.session.cookies:
+            cookies.append({
+                "name": c.name, "value": c.value,
+                "domain": c.domain, "path": c.path,
+            })
+        with open(_COOKIE_FILE, "w") as f:
+            json.dump(cookies, f, indent=2)
+        logger.debug(f"Saved {len(cookies)} cookies")
 
     def _wait_for_rate_limit(self):
         """Wait random delay between requests to appear human."""
@@ -50,7 +70,7 @@ class TcdbClient:
             logger.debug(f"Rate limit: waiting {wait:.1f}s")
             time.sleep(wait)
 
-    def get(self, url: str) -> requests.Response:
+    def get(self, url: str):
         """GET with rate limiting and retry."""
         self._wait_for_rate_limit()
 
@@ -77,25 +97,73 @@ class TcdbClient:
         raise last_error
 
     def login(self, username: str, password: str) -> bool:
-        """Login to TCDB. Returns True on success."""
-        # First GET the login page to pick up session cookies
-        self._wait_for_rate_limit()
-        self._last_request_time = time.time()
-        self.session.get(f"{self.BASE_URL}/Login.cfm", timeout=self.timeout)
+        """Login to TCDB. Returns True on success.
 
-        self._wait_for_rate_limit()
-        self._last_request_time = time.time()
-        resp = self.session.post(
-            f"{self.BASE_URL}/Login.cfm",
-            data={"username": username, "password": password},
-            timeout=self.timeout,
-            allow_redirects=True
+        TCDB's login page is behind Cloudflare's JS challenge which
+        cloudscraper cannot solve. Instead, use import_browser_cookies()
+        or manually place cookies.json next to this file.
+        """
+        logger.warning(
+            "Direct login is blocked by Cloudflare. "
+            "Use 'python migrator.py --import-cookies' to import cookies "
+            "from your browser instead."
         )
+        return False
 
-        # Check if login succeeded by looking for signs of being logged in
-        logged_in = "Logout" in resp.text or "MyProfile" in resp.text or "My Profile" in resp.text
+    def is_logged_in(self) -> bool:
+        """Check if current session has a valid login."""
+        self._wait_for_rate_limit()
+        self._last_request_time = time.time()
+        resp = self.session.get(f"{self.BASE_URL}/MyProfile.cfm",
+                                timeout=self.timeout, allow_redirects=False)
+        # If logged in, MyProfile returns 200; if not, redirects to Login
+        logged_in = resp.status_code == 200
         if logged_in:
-            logger.info("Login successful")
+            logger.info("Session is authenticated")
         else:
-            logger.error("Login failed -- check credentials")
+            logger.info("Session is NOT authenticated")
         return logged_in
+
+    def import_browser_cookies(self, browser: str = "chrome") -> bool:
+        """Import cookies from a local browser using browser_cookie3.
+
+        Requires: pip install browser-cookie3
+        User must be logged into tcdb.com in their browser.
+        """
+        try:
+            import browser_cookie3
+        except ImportError:
+            logger.error(
+                "browser_cookie3 not installed. Run: pip install browser-cookie3"
+            )
+            return False
+
+        try:
+            if browser == "chrome":
+                cj = browser_cookie3.chrome(domain_name=".tcdb.com")
+            elif browser == "firefox":
+                cj = browser_cookie3.firefox(domain_name=".tcdb.com")
+            elif browser == "edge":
+                cj = browser_cookie3.edge(domain_name=".tcdb.com")
+            else:
+                logger.error(f"Unsupported browser: {browser}")
+                return False
+
+            count = 0
+            for cookie in cj:
+                self.session.cookies.set(cookie.name, cookie.value,
+                                         domain=cookie.domain, path=cookie.path)
+                count += 1
+
+            if count == 0:
+                logger.error("No TCDB cookies found. Are you logged in to tcdb.com in your browser?")
+                return False
+
+            self._save_cookies()
+            logger.info(f"Imported {count} cookies from {browser}")
+
+            # Verify the cookies work
+            return self.is_logged_in()
+        except Exception as e:
+            logger.error(f"Failed to import cookies from {browser}: {e}")
+            return False

@@ -104,8 +104,7 @@ def parse_set_detail_page(html: str) -> dict:
         total_cards   (int|None)
         cards         (list[dict])   – each has card_number, player, team,
                                         image_url, rc_sp
-        insert_sections (list[dict]) – best-effort
-        parallels       (list[dict]) – best-effort
+        sub_sets      (list[dict])   – insert/parallel sub-sets linked from page
     """
     soup = BeautifulSoup(html, "html.parser")
 
@@ -115,63 +114,93 @@ def parse_set_detail_page(html: str) -> dict:
 
     # --- total cards ---
     total_cards: Optional[int] = None
-    total_label = soup.find(string=re.compile(r"Total\s+Cards:", re.I))
+    total_label = soup.find("strong", string=re.compile(r"Total\s+Cards", re.I))
     if total_label:
-        # The number usually follows in a <strong> or plain text
-        parent = total_label.parent if total_label.parent else total_label
-        num_match = re.search(r"Total\s+Cards:\s*(\d+)", parent.get_text(), re.I)
-        if num_match:
-            total_cards = int(num_match.group(1))
+        # Number is the next text sibling after the <strong>
+        for sib in total_label.next_siblings:
+            sib_text = sib.get_text(strip=True) if hasattr(sib, "get_text") else str(sib).strip()
+            if sib_text:
+                num_match = re.search(r"(\d[\d,]*)", sib_text)
+                if num_match:
+                    total_cards = int(num_match.group(1).replace(",", ""))
+                break
 
     # --- cards ---
     cards = _parse_card_rows(soup)
 
-    # --- inserts & parallels (best-effort) ---
-    insert_sections = _parse_insert_sections(soup)
-    parallels = _parse_parallels(soup)
+    # --- sub-sets (inserts & parallels linked from page) ---
+    sub_sets = _parse_sub_sets(soup)
 
     return {
         "title": title,
         "total_cards": total_cards,
         "cards": cards,
-        "insert_sections": insert_sections,
-        "parallels": parallels,
+        "sub_sets": sub_sets,
     }
 
 
+_VIEWCARD_RE = re.compile(r"/ViewCard\.cfm/sid/\d+/cid/\d+")
+_PERSON_RE = re.compile(r"/Person\.cfm/pid/\d+")
+_TEAM_RE = re.compile(r"/Team\.cfm/tid/\d+")
+
+
 def _parse_card_rows(soup: BeautifulSoup) -> list[dict]:
-    """Extract card rows from the set detail table."""
+    """Extract card rows from the set detail or checklist table.
+
+    Card rows are identified by containing a ViewCard link. Key data is
+    extracted by anchor patterns rather than column position (since the
+    checklist page has many empty spacer cells).
+    """
     cards: list[dict] = []
 
-    # TCDB typically renders cards in <tr> rows inside tables.
-    # We look for rows whose first <td> has valign="top".
     for tr in soup.find_all("tr"):
-        tds = tr.find_all("td", valign="top")
-        if not tds:
+        # Card rows must contain a ViewCard link
+        viewcard_link = tr.find("a", href=_VIEWCARD_RE)
+        if not viewcard_link:
             continue
 
-        # Heuristic: need at least 2 cells (number + player)
-        all_tds = tr.find_all("td")
-        if len(all_tds) < 2:
-            continue
+        # --- Card number: text of the ViewCard anchor ---
+        card_number = viewcard_link.get_text(strip=True)
+        # Skip if it looks like an image-only link (empty text)
+        if not card_number:
+            # Try other ViewCard links in the row
+            for a in tr.find_all("a", href=_VIEWCARD_RE):
+                t = a.get_text(strip=True)
+                if t:
+                    card_number = t
+                    break
 
-        card_number = all_tds[0].get_text(strip=True)
-        player = all_tds[1].get_text(strip=True)
-        team = all_tds[2].get_text(strip=True) if len(all_tds) > 2 else ""
-
-        # Image URL – prefer data-original (lazy load)
-        image_url: Optional[str] = None
-        img_tag = tr.find("img", attrs={"data-original": True})
-        if img_tag:
-            image_url = img_tag["data-original"]
-
-        # RC / SP flags – look for small text markers
-        row_text = tr.get_text()
+        # --- Player name: anchor with /Person.cfm link ---
+        player = ""
         rc_sp: list[str] = []
-        if re.search(r"\bRC\b", row_text):
-            rc_sp.append("RC")
-        if re.search(r"\bSP\b", row_text):
-            rc_sp.append("SP")
+        person_link = tr.find("a", href=_PERSON_RE)
+        if person_link:
+            player = person_link.get_text(strip=True)
+            # RC/SP flags are text siblings after the person anchor
+            player_cell = person_link.parent
+            if player_cell:
+                cell_text = player_cell.get_text(strip=True)
+                trailing = cell_text[len(player):].strip() if player else cell_text
+                if "RC" in trailing:
+                    rc_sp.append("RC")
+                if "SP" in trailing:
+                    rc_sp.append("SP")
+
+        # --- Team: anchor with /Team.cfm link ---
+        team = ""
+        team_link = tr.find("a", href=_TEAM_RE)
+        if team_link:
+            team = team_link.get_text(strip=True)
+
+        # --- Image URL: front thumbnail (data-original, not Thumb3) ---
+        image_url: Optional[str] = None
+        for img in tr.find_all("img", attrs={"data-original": True}):
+            src = img["data-original"]
+            if "Thumb3" not in src:
+                image_url = src
+                break
+            elif image_url is None:
+                image_url = src
 
         cards.append(
             {
@@ -187,77 +216,32 @@ def _parse_card_rows(soup: BeautifulSoup) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Insert sections  (best-effort)
+# Sub-sets (inserts & parallels)
 # ---------------------------------------------------------------------------
 
+_CHECKLIST_RE = re.compile(r"/Checklist\.cfm/sid/(\d+)")
 
-def _parse_insert_sections(soup: BeautifulSoup) -> list[dict]:
-    """Parse insert set sections from a set detail page.
 
-    Returns a list of dicts: [{name, card_count, odds}]
+def _parse_sub_sets(soup: BeautifulSoup) -> list[dict]:
+    """Parse insert/parallel sub-set links from the 'Inserts and Related Sets' section.
+
+    Returns a list of dicts: [{tcdb_id, name}]
     """
-    sections: list[dict] = []
+    sub_sets: list[dict] = []
+    seen: set[int] = set()
 
-    for header in soup.find_all(string=re.compile(r"Insert", re.I)):
-        parent = header.parent if isinstance(header, str) else header
-        if not isinstance(parent, Tag):
+    for anchor in soup.find_all("a", href=_CHECKLIST_RE):
+        m = _CHECKLIST_RE.search(anchor["href"])
+        if not m:
             continue
-        name = parent.get_text(strip=True)
-
-        card_count: Optional[int] = None
-        odds: Optional[str] = None
-
-        # Look in surrounding text for counts and odds
-        sibling_text = parent.parent.get_text() if parent.parent else ""
-        cc_match = re.search(r"(\d+)\s+cards?", sibling_text, re.I)
-        if cc_match:
-            card_count = int(cc_match.group(1))
-        odds_match = re.search(r"(1:\d+)", sibling_text)
-        if odds_match:
-            odds = odds_match.group(1)
-
-        sections.append({"name": name, "card_count": card_count, "odds": odds})
-
-    return sections
-
-
-# ---------------------------------------------------------------------------
-# Parallels  (best-effort)
-# ---------------------------------------------------------------------------
-
-
-def _parse_parallels(soup: BeautifulSoup) -> list[dict]:
-    """Parse parallel information from a set detail page.
-
-    Returns a list of dicts: [{name, print_run, exclusive}]
-    """
-    parallels: list[dict] = []
-
-    for el in soup.find_all(string=re.compile(r"Parallel", re.I)):
-        parent = el.parent if isinstance(el, str) else el
-        if not isinstance(parent, Tag):
+        tcdb_id = int(m.group(1))
+        name = anchor.get("title", anchor.get_text(strip=True))
+        if name in ("Checklist", "More", "") or tcdb_id in seen:
             continue
-        name = parent.get_text(strip=True)
+        seen.add(tcdb_id)
+        sub_sets.append({"tcdb_id": tcdb_id, "name": name})
 
-        print_run: Optional[int] = None
-        exclusive: Optional[str] = None
-
-        sibling_text = parent.parent.get_text() if parent.parent else ""
-        pr_match = re.search(r"#(?:d|/)\s*(\d+)", sibling_text)
-        if not pr_match:
-            pr_match = re.search(r"(\d+)\s*(?:copies|print run)", sibling_text, re.I)
-        if pr_match:
-            print_run = int(pr_match.group(1))
-
-        excl_match = re.search(r"(Hobby|Retail|Online)\s+Exclusive", sibling_text, re.I)
-        if excl_match:
-            exclusive = excl_match.group(1)
-
-        parallels.append(
-            {"name": name, "print_run": print_run, "exclusive": exclusive}
-        )
-
-    return parallels
+    return sub_sets
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +263,45 @@ def parse_next_page_url(html: str) -> Optional[str]:
             return anchor["href"]
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Sub-set expansion (AJAX endpoint)
+# ---------------------------------------------------------------------------
+
+
+def parse_sub_set_list(html: str) -> list[dict]:
+    """Parse the AJAX response from /ViewAllExp.cfm?SetID=NNN.
+
+    This returns all insert/parallel sub-sets for a parent set.
+    Returns a list of dicts: [{tcdb_id, name, url_slug}]
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict] = []
+    seen: set[int] = set()
+
+    for anchor in soup.find_all("a", href=_SET_ID_RE):
+        href = anchor["href"]
+        sid_match = _SET_ID_RE.search(href)
+        if not sid_match:
+            continue
+
+        tcdb_id = int(sid_match.group(1))
+        if tcdb_id in seen:
+            continue
+        seen.add(tcdb_id)
+
+        name = anchor.get_text(strip=True)
+
+        slug_start = href.find(f"/sid/{tcdb_id}/")
+        if slug_start != -1:
+            url_slug = href[slug_start + len(f"/sid/{tcdb_id}/"):]
+        else:
+            url_slug = ""
+
+        results.append({"tcdb_id": tcdb_id, "name": name, "url_slug": url_slug})
+
+    return results
 
 
 # ---------------------------------------------------------------------------

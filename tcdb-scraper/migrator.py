@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 TCDB Collection Migrator
-Logs into TCDB, reads your collection, and generates data for CardVoice import.
+Reads your TCDB collection and generates data for CardVoice import.
 
 Usage:
-    python migrator.py --discover     # Find which sets you own, save to my_sets.json
-    python migrator.py --migrate      # Full migration: read all owned cards, output qty_updates.json
+    python migrator.py --import-cookies          # Import login cookies from your browser
+    python migrator.py --import-cookies firefox   # Import from Firefox instead of Chrome
+    python migrator.py --discover                 # Find which sets you own, save to my_sets.json
+    python migrator.py --migrate                  # Full migration: read all owned cards
 """
 import os
 import sys
@@ -35,14 +37,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def login(client: TcdbClient) -> bool:
-    """Login to TCDB using .env credentials."""
-    username = os.getenv("TCDB_USER")
-    password = os.getenv("TCDB_PASS")
-    if not username or not password:
-        logger.error("TCDB_USER and TCDB_PASS must be set in .env file")
-        return False
-    return client.login(username, password)
+def ensure_logged_in(client: TcdbClient) -> bool:
+    """Verify session is authenticated. Prompts user if not."""
+    if client.is_logged_in():
+        return True
+    logger.error(
+        "Not logged in. First run:\n"
+        "  1. Log into tcdb.com in your browser (Chrome/Edge/Firefox)\n"
+        "  2. python migrator.py --import-cookies\n"
+        "Then retry your command."
+    )
+    return False
 
 
 def discover_owned_sets(client: TcdbClient, username: str) -> list[dict]:
@@ -111,25 +116,41 @@ def migrate_collection(client: TcdbClient, username: str) -> list[dict]:
 
 def main():
     parser = argparse.ArgumentParser(description="TCDB Collection Migrator")
+    parser.add_argument("--import-cookies", nargs="?", const="chrome",
+                        metavar="BROWSER",
+                        help="Import login cookies from browser (chrome/edge/firefox)")
     parser.add_argument("--discover", action="store_true",
                         help="Discover owned sets, save to my_sets.json")
     parser.add_argument("--migrate", action="store_true",
                         help="Full migration: read all owned cards")
     args = parser.parse_args()
 
-    if not args.discover and not args.migrate:
+    if not args.discover and not args.migrate and args.import_cookies is None:
         parser.print_help()
         return
+
+    client = TcdbClient()
+
+    # Handle cookie import
+    if args.import_cookies is not None:
+        browser = args.import_cookies
+        logger.info(f"Importing cookies from {browser}...")
+        if client.import_browser_cookies(browser):
+            logger.info("Cookie import successful — you are logged in!")
+        else:
+            logger.error("Cookie import failed. Make sure you're logged into tcdb.com in your browser.")
+            sys.exit(1)
+        if not args.discover and not args.migrate:
+            return
 
     username = os.getenv("TCDB_USER")
     if not username:
         logger.error("TCDB_USER must be set in .env file")
         sys.exit(1)
 
-    client = TcdbClient()
-
-    if not login(client):
-        sys.exit(1)
+    if args.discover or args.migrate:
+        if not ensure_logged_in(client):
+            sys.exit(1)
 
     if args.discover:
         logger.info("Mode: Discover owned sets")
