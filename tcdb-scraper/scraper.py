@@ -323,6 +323,62 @@ def _is_parallel(name: str) -> bool:
     return any(kw in lower for kw in _PARALLEL_KEYWORDS)
 
 
+def list_sets_json(client: TcdbClient, year: int,
+                    sport: str = "Baseball") -> list[dict]:
+    """Fetch available sets for a year and return a JSON-serializable list.
+
+    Each dict contains: tcdb_id, name, url_slug, card_count, year.
+    """
+    url = f"{TCDB_BASE}/ViewAll.cfm/sp/{sport}/year/{year}"
+    resp = client.get(url)
+    sets = parse_set_list_page(resp.text)
+    for s in sets:
+        s["year"] = year
+    return sets
+
+
+def preview_set_json(client: TcdbClient, set_info: dict) -> dict:
+    """Scrape one set and return a structured, JSON-serializable dict.
+
+    Returns a dict with: tcdb_id, name, year, brand, base_cards,
+    total_cards, parallels, inserts.
+    """
+    tcdb_id = set_info["tcdb_id"]
+    name = set_info["name"]
+    url_slug = set_info.get("url_slug", name.replace(" ", "-"))
+    year = set_info.get("year", 0)
+    brand = extract_brand(name)
+
+    # Scrape base cards from Checklist page
+    result = scrape_set_cards(client, tcdb_id, url_slug)
+    base_cards = result.get("total_cards") or len(result.get("cards", []))
+
+    # Discover sub-sets (inserts & parallels) via AJAX
+    sub_sets = discover_sub_sets(client, tcdb_id, parent_name=name)
+
+    parallels = []
+    inserts = []
+    for s in sub_sets:
+        entry = {"tcdb_id": s["tcdb_id"], "name": s["name"]}
+        if _is_parallel(s["name"]):
+            parallels.append(entry)
+        else:
+            inserts.append(entry)
+
+    total_cards = base_cards  # base only; sub-set card counts would require extra fetches
+
+    return {
+        "tcdb_id": tcdb_id,
+        "name": name,
+        "year": year,
+        "brand": brand,
+        "base_cards": base_cards,
+        "total_cards": total_cards,
+        "parallels": parallels,
+        "inserts": inserts,
+    }
+
+
 def preview_set(client: TcdbClient, set_info: dict) -> str:
     """Scrape one set and return a human-readable text preview."""
     tcdb_id = set_info["tcdb_id"]
@@ -384,19 +440,80 @@ def main():
                         help="Preview one set as text (auto picks first, or pass a set ID)")
     parser.add_argument("--no-images", action="store_true",
                         help="Skip downloading thumbnail images")
+    parser.add_argument("--json", action="store_true",
+                        help="Output results as JSON (for API integration)")
+    parser.add_argument("--list", action="store_true",
+                        help="List available sets for a year")
+    parser.add_argument("--set-id", type=int, default=None,
+                        help="TCDB set ID to operate on")
+    parser.add_argument("--year", type=int, default=START_YEAR,
+                        help=f"Year for --list mode (default: {START_YEAR})")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
     client = TcdbClient()
+
+    # --- List mode: show available sets for a year ---
+    if args.list:
+        sets = list_sets_json(client, year=args.year)
+        if args.json:
+            print(json.dumps(sets, indent=2))
+        else:
+            # Text table output
+            print(f"{'ID':>8}  {'Name':<50}  {'Cards':>6}")
+            print(f"{'-' * 8}  {'-' * 50}  {'-' * 6}")
+            for s in sets:
+                cc = s.get("card_count") or ""
+                print(f"{s['tcdb_id']:>8}  {s['name']:<50}  {str(cc):>6}")
+            print(f"\n{len(sets)} sets found for {args.year}")
+        return
+
+    # --- Preview + JSON mode: structured JSON output ---
+    if args.preview is not None and args.json:
+        set_id = args.set_id
+        if args.preview != "auto":
+            set_id = int(args.preview)
+
+        if set_id:
+            # Fetch set info from the page to get name/slug
+            resp = client.get(f"{TCDB_BASE}/ViewSet.cfm/sid/{set_id}")
+            detail = parse_set_detail_page(resp.text)
+            raw_title = detail.get("title", "")
+            set_name = raw_title.split(" - Trading Card")[0].replace(" Baseball", "").strip()
+            if not set_name:
+                set_name = f"Set-{set_id}"
+            slug = set_name.replace(" ", "-")
+            info = {"tcdb_id": set_id, "name": set_name, "url_slug": slug, "year": args.year}
+        else:
+            # Auto: discover one year and pick first set
+            url = f"{TCDB_BASE}/ViewAll.cfm/sp/Baseball/year/{args.year}"
+            resp = client.get(url)
+            sets = parse_set_list_page(resp.text)
+            if not sets:
+                print(json.dumps({"error": "No sets found"}))
+                return
+            info = sets[0]
+            info["year"] = args.year
+
+        result = preview_set_json(client, info)
+        print(json.dumps(result, indent=2))
+        return
+
     cp = Checkpoint(CHECKPOINT_PATH)
 
-    # --- Preview mode ---
+    # --- Preview mode (text) ---
     if args.preview is not None:
+        # Determine set ID: --preview <id> takes precedence, then --set-id, then auto
+        sid = None
         if args.preview != "auto":
-            # User specified a set ID — fetch the real page to get name/slug
             sid = int(args.preview)
+        elif args.set_id:
+            sid = args.set_id
+
+        if sid:
+            # User specified a set ID — fetch the real page to get name/slug
             logger.info(f"Fetching set info for ID {sid}...")
             resp = client.get(f"{TCDB_BASE}/ViewSet.cfm/sid/{sid}")
             detail = parse_set_detail_page(resp.text)
