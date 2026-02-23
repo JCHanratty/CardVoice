@@ -23,6 +23,32 @@ export default function AdminPage() {
   // Search/filter
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Update state
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState('');
+
+  const checkForUpdates = async () => {
+    if (!window.electronAPI?.checkForUpdates) {
+      setUpdateMsg('Updates only available in the desktop app');
+      return;
+    }
+    setUpdateChecking(true);
+    setUpdateMsg('');
+    try {
+      const result = await window.electronAPI.checkForUpdates();
+      if (result.error) {
+        setUpdateMsg(result.error);
+      } else if (result.version) {
+        setUpdateMsg(`Update v${result.version} found — downloading...`);
+      } else {
+        setUpdateMsg('You are on the latest version');
+      }
+    } catch (err) {
+      setUpdateMsg(err.message || 'Failed to check for updates');
+    }
+    setUpdateChecking(false);
+  };
+
   const browse = async () => {
     setLoading(true);
     setError('');
@@ -96,6 +122,31 @@ export default function AdminPage() {
       <h1 className="text-2xl font-display font-bold text-cv-text mb-6 flex items-center gap-2">
         <Shield size={24} /> Admin
       </h1>
+
+      {/* Check for Updates */}
+      <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-display font-semibold text-cv-text">App Updates</h2>
+            <p className="text-xs text-cv-muted mt-1">Check for new versions of CardVoice</p>
+          </div>
+          <button
+            onClick={checkForUpdates}
+            disabled={updateChecking}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+              updateChecking
+                ? 'bg-cv-border/50 text-cv-muted cursor-not-allowed'
+                : 'bg-cv-accent/20 hover:bg-cv-accent/30 text-cv-accent'
+            } transition-all`}
+          >
+            <RefreshCw size={16} className={updateChecking ? 'animate-spin' : ''} />
+            {updateChecking ? 'Checking...' : 'Check for Updates'}
+          </button>
+        </div>
+        {updateMsg && (
+          <div className="mt-3 text-sm text-cv-muted">{updateMsg}</div>
+        )}
+      </div>
 
       {/* Browse Section */}
       <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">

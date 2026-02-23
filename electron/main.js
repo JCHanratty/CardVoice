@@ -257,6 +257,15 @@ ipcMain.handle('quit-and-install', () => {
   autoUpdater.quitAndInstall(false, true);
 });
 
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { checking: true, version: result?.updateInfo?.version || null };
+  } catch (err) {
+    return { checking: false, error: err.message };
+  }
+});
+
 // ============================================================
 // App Lifecycle
 // ============================================================
