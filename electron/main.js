@@ -254,7 +254,7 @@ function createWindow() {
 ipcMain.handle('get-app-version', () => app.getVersion());
 
 ipcMain.handle('quit-and-install', () => {
-  autoUpdater.quitAndInstall(false, true);
+  autoUpdater.quitAndInstall(true, true);
 });
 
 ipcMain.handle('check-for-updates', async () => {
