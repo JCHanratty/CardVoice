@@ -2,6 +2,7 @@
  * CardVoice Express Server
  * Entry point — works standalone (CLI) and embedded (Electron require).
  */
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { openDb } = require('./db');
@@ -36,6 +37,14 @@ function createServer(opts = {}) {
   const syncService = new SyncService(db);
   app.locals.syncService = syncService;
   setTimeout(() => syncService.start(), 5000);
+
+  // Start TCDB scraper service
+  const { TcdbService } = require('./tcdb-service');
+  const tcdbService = new TcdbService({
+    scraperDir: path.join(__dirname, '..', 'tcdb-scraper'),
+    db,
+  });
+  app.locals.tcdbService = tcdbService;
 
   // Anonymous heartbeat (delayed, non-blocking)
   const { sendHeartbeat } = require('./analytics');

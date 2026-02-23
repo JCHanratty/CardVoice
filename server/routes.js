@@ -1767,6 +1767,67 @@ function createRoutes(db) {
     res.json(syncService.getStatus());
   });
 
+  // ============================================================
+  // TCDB Admin Endpoints
+  // ============================================================
+
+  // POST /api/admin/tcdb/browse — list sets for a year
+  router.post('/api/admin/tcdb/browse', async (req, res) => {
+    const tcdb = req.app.locals.tcdbService;
+    if (!tcdb) return res.status(500).json({ error: 'TCDB service not available' });
+    const { year } = req.body;
+    if (!year) return res.status(400).json({ error: 'year is required' });
+    try {
+      const sets = await tcdb.browse(year);
+      res.json(sets);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/tcdb/preview — preview a set's cards/inserts/parallels
+  router.post('/api/admin/tcdb/preview', async (req, res) => {
+    const tcdb = req.app.locals.tcdbService;
+    if (!tcdb) return res.status(500).json({ error: 'TCDB service not available' });
+    const { setId, year } = req.body;
+    if (!setId) return res.status(400).json({ error: 'setId is required' });
+    try {
+      const preview = await tcdb.preview(setId, year);
+      res.json(preview);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/tcdb/import — scrape a set and merge into CardVoice DB
+  router.post('/api/admin/tcdb/import', async (req, res) => {
+    const tcdb = req.app.locals.tcdbService;
+    if (!tcdb) return res.status(500).json({ error: 'TCDB service not available' });
+    if (tcdb.getStatus().running) return res.json({ message: 'Import already running' });
+    const { setId, year } = req.body;
+    if (!setId) return res.status(400).json({ error: 'setId is required' });
+    // Fire and forget — frontend polls /status
+    tcdb.importSet(setId, year).catch(err => {
+      console.error('[TCDB] Import failed:', err.message);
+    });
+    res.json({ message: 'Import started' });
+  });
+
+  // GET /api/admin/tcdb/status — poll import progress
+  router.get('/api/admin/tcdb/status', (req, res) => {
+    const tcdb = req.app.locals.tcdbService;
+    if (!tcdb) return res.status(500).json({ error: 'TCDB service not available' });
+    res.json(tcdb.getStatus());
+  });
+
+  // POST /api/admin/tcdb/cancel — cancel running import
+  router.post('/api/admin/tcdb/cancel', (req, res) => {
+    const tcdb = req.app.locals.tcdbService;
+    if (!tcdb) return res.status(500).json({ error: 'TCDB service not available' });
+    tcdb.cancel();
+    res.json({ message: 'Cancelled' });
+  });
+
   return router;
 }
 
