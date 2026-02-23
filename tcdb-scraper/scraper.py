@@ -351,7 +351,8 @@ def preview_set_json(client: TcdbClient, set_info: dict) -> dict:
 
     # Scrape base cards from Checklist page
     result = scrape_set_cards(client, tcdb_id, url_slug)
-    base_cards = result.get("total_cards") or len(result.get("cards", []))
+    base_cards = result.get("cards", [])
+    total = result.get("total_cards") or len(base_cards)
 
     # Discover sub-sets (inserts & parallels) via AJAX
     sub_sets = discover_sub_sets(client, tcdb_id, parent_name=name)
@@ -365,15 +366,13 @@ def preview_set_json(client: TcdbClient, set_info: dict) -> dict:
         else:
             inserts.append(entry)
 
-    total_cards = base_cards  # base only; sub-set card counts would require extra fetches
-
     return {
         "tcdb_id": tcdb_id,
         "name": name,
         "year": year,
         "brand": brand,
         "base_cards": base_cards,
-        "total_cards": total_cards,
+        "total_cards": total,
         "parallels": parallels,
         "inserts": inserts,
     }
@@ -524,7 +523,7 @@ def main():
                 set_name = f"Set-{sid}"
             # Build URL slug from name
             slug = set_name.replace(" ", "-")
-            info = {"tcdb_id": sid, "name": set_name, "url_slug": slug, "year": 0}
+            info = {"tcdb_id": sid, "name": set_name, "url_slug": slug, "year": args.year}
         else:
             # Auto: discover one year and pick first set
             url = f"{TCDB_BASE}/ViewAll.cfm/sp/Baseball/year/{args.start_year}"

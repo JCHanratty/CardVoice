@@ -1,9 +1,7 @@
 """Tests for scraper CLI JSON modes: --list --json and --preview --json."""
 
 import json
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 
 # ---------------------------------------------------------------------------
@@ -196,11 +194,13 @@ class TestPreviewSetJson:
         assert result["year"] == 2025
         assert result["brand"] == "Topps"
 
-        # base_cards is the count from the Checklist page
-        assert result["base_cards"] == 350  # from Total Cards in fixture
+        # base_cards is a list of card dicts from the Checklist page
+        assert isinstance(result["base_cards"], list)
+        assert len(result["base_cards"]) == 3  # 3 cards in fixture
+        assert result["base_cards"][0]["player"] == "Aaron Judge"
 
-        # total_cards >= base_cards
-        assert result["total_cards"] >= result["base_cards"]
+        # total_cards is the integer count
+        assert result["total_cards"] == 350  # from Total Cards in fixture
 
         # parallels and inserts are lists
         assert isinstance(result["parallels"], list)
