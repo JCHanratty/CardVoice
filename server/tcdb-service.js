@@ -119,6 +119,7 @@ class TcdbService {
       const proc = spawn(this.python, [scriptPath, ...args], {
         cwd: this.scraperDir,
         env: { ...process.env },
+        shell: true,
       });
       this._process = proc;
 
