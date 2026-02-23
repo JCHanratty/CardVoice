@@ -23,11 +23,12 @@ class TcdbService {
       result: null,        // last completed result
       error: null,
     };
+    this._log = [];        // rolling buffer of recent scraper log lines
     this._process = null;
   }
 
   getStatus() {
-    return { ...this._status };
+    return { ...this._status, log: this._log.slice(-30) };
   }
 
   /**
@@ -53,6 +54,7 @@ class TcdbService {
    * Returns a promise that resolves to the scrape summary.
    */
   async importSet(setId, year) {
+    this._log = [];
     this._status = {
       running: true,
       phase: 'importing',
@@ -104,6 +106,7 @@ class TcdbService {
    * Spawn scraper, collect stdout, parse JSON, update status.
    */
   _runScraper(args, phase) {
+    this._log = [];
     this._status = { running: true, phase, progress: null, result: null, error: null };
 
     return this._runScraperRaw(args).then(result => {
@@ -132,7 +135,20 @@ class TcdbService {
       let stderr = '';
 
       proc.stdout.on('data', (data) => { stdout += data.toString(); });
-      proc.stderr.on('data', (data) => { stderr += data.toString(); });
+      proc.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        // Parse log lines and add to rolling buffer
+        const lines = chunk.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          this._log.push(line.trim());
+          if (this._log.length > 100) this._log.shift();
+          // Update currentItem with the latest meaningful log line
+          if (this._status.running && this._status.progress) {
+            this._status.progress.currentItem = line.trim();
+          }
+        }
+      });
 
       proc.on('close', (code) => {
         this._process = null;

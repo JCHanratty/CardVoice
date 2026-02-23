@@ -348,7 +348,15 @@ export default function AdminPage() {
               />
             </div>
           )}
-          <div className="text-xs text-cv-text">{importStatus.progress.currentItem}</div>
+          <div className="text-xs text-cv-text mb-3">{importStatus.progress.currentItem}</div>
+          {/* Live scraper log */}
+          {importStatus.log?.length > 0 && (
+            <div className="bg-cv-dark/80 rounded-lg border border-cv-border/30 p-3 max-h-40 overflow-y-auto font-mono text-[11px] leading-relaxed text-cv-muted">
+              {importStatus.log.map((line, i) => (
+                <div key={i} className={i === importStatus.log.length - 1 ? 'text-cv-text' : ''}>{line}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
