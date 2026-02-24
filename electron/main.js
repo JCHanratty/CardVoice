@@ -87,6 +87,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.checkForUpdates();
+
+  // Re-check every 30 minutes while the app is running
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  }, 30 * 60 * 1000);
 }
 
 // ============================================================
