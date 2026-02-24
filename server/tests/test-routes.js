@@ -644,3 +644,26 @@ describe('card_parallels', () => {
     assert.equal(row, undefined);
   });
 });
+
+
+// ============================================================
+// Nested Metadata
+// ============================================================
+describe('Nested Metadata', () => {
+  it('returns parallels nested under insert types', async () => {
+    const set = (await api('POST', '/api/sets', { name: 'NestTest', year: 2025, sport: 'Baseball', brand: 'Topps' })).data;
+    const itId = db.prepare('INSERT INTO set_insert_types (set_id, name) VALUES (?, ?)').run(set.id, 'Chrome').lastInsertRowid;
+    const p1Id = db.prepare('INSERT INTO set_parallels (set_id, name) VALUES (?, ?)').run(set.id, 'Gold Refractor').lastInsertRowid;
+    const p2Id = db.prepare('INSERT INTO set_parallels (set_id, name) VALUES (?, ?)').run(set.id, 'Black Refractor').lastInsertRowid;
+    db.prepare('INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)').run(itId, p1Id);
+    db.prepare('INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)').run(itId, p2Id);
+
+    const { data } = await api('GET', `/api/sets/${set.id}/metadata`);
+    const chrome = data.insertTypes.find(t => t.name === 'Chrome');
+    assert.ok(chrome);
+    assert.ok(chrome.parallels);
+    assert.strictEqual(chrome.parallels.length, 2);
+    assert.ok(chrome.parallels.find(p => p.name === 'Gold Refractor'));
+    assert.ok(chrome.parallels.find(p => p.name === 'Black Refractor'));
+  });
+});

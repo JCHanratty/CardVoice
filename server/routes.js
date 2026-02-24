@@ -654,6 +654,28 @@ function createRoutes(db) {
       'SELECT id, name, print_run, exclusive, notes, serial_max, channels, variation_type FROM set_parallels WHERE set_id = ? ORDER BY id'
     ).all(setId);
 
+    // Nest parallels under their insert types via the junction table
+    const junctionRows = db.prepare(`
+      SELECT itp.insert_type_id, itp.parallel_id, sp.name, sp.print_run, sp.exclusive, sp.notes, sp.serial_max, sp.channels, sp.variation_type
+      FROM insert_type_parallels itp
+      JOIN set_parallels sp ON sp.id = itp.parallel_id
+      WHERE sp.set_id = ?
+    `).all(setId);
+
+    const parallelsByInsertType = {};
+    for (const row of junctionRows) {
+      if (!parallelsByInsertType[row.insert_type_id]) parallelsByInsertType[row.insert_type_id] = [];
+      parallelsByInsertType[row.insert_type_id].push({
+        id: row.parallel_id, name: row.name, print_run: row.print_run,
+        exclusive: row.exclusive, notes: row.notes, serial_max: row.serial_max,
+        channels: row.channels, variation_type: row.variation_type,
+      });
+    }
+
+    for (const it of insertTypes) {
+      it.parallels = parallelsByInsertType[it.id] || [];
+    }
+
     res.json({ insertTypes, parallels });
   });
 
