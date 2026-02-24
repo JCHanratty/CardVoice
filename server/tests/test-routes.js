@@ -509,3 +509,138 @@ describe('Checklist Import', () => {
     assert.equal(after.cards.length, countBefore); // no new cards
   });
 });
+
+
+// ============================================================
+// insert_type_parallels Junction Table
+// ============================================================
+describe('insert_type_parallels', () => {
+  it('table exists and accepts inserts', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('ITP Test', 2025)").run().lastInsertRowid;
+    const itId = db.prepare("INSERT INTO set_insert_types (set_id, name) VALUES (?, 'Base')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Gold')").run(setId).lastInsertRowid;
+
+    const result = db.prepare("INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)").run(itId, pId);
+    assert.ok(result.lastInsertRowid);
+
+    const row = db.prepare("SELECT * FROM insert_type_parallels WHERE id = ?").get(result.lastInsertRowid);
+    assert.equal(row.insert_type_id, itId);
+    assert.equal(row.parallel_id, pId);
+  });
+
+  it('enforces UNIQUE(insert_type_id, parallel_id)', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('ITP Unique', 2025)").run().lastInsertRowid;
+    const itId = db.prepare("INSERT INTO set_insert_types (set_id, name) VALUES (?, 'Base')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Silver')").run(setId).lastInsertRowid;
+
+    db.prepare("INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)").run(itId, pId);
+    assert.throws(() => {
+      db.prepare("INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)").run(itId, pId);
+    });
+  });
+
+  it('CASCADE delete — deleting insert type removes junction rows', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('ITP Cascade IT', 2025)").run().lastInsertRowid;
+    const itId = db.prepare("INSERT INTO set_insert_types (set_id, name) VALUES (?, 'Chrome')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Refractor')").run(setId).lastInsertRowid;
+
+    db.prepare("INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)").run(itId, pId);
+
+    // Verify row exists
+    let row = db.prepare("SELECT * FROM insert_type_parallels WHERE insert_type_id = ?").get(itId);
+    assert.ok(row);
+
+    // Delete the insert type — should cascade
+    db.prepare("DELETE FROM set_insert_types WHERE id = ?").run(itId);
+
+    row = db.prepare("SELECT * FROM insert_type_parallels WHERE insert_type_id = ?").get(itId);
+    assert.equal(row, undefined);
+  });
+
+  it('CASCADE delete — deleting parallel removes junction rows', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('ITP Cascade P', 2025)").run().lastInsertRowid;
+    const itId = db.prepare("INSERT INTO set_insert_types (set_id, name) VALUES (?, 'Base')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Blue')").run(setId).lastInsertRowid;
+
+    db.prepare("INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)").run(itId, pId);
+
+    // Delete the parallel — should cascade
+    db.prepare("DELETE FROM set_parallels WHERE id = ?").run(pId);
+
+    const row = db.prepare("SELECT * FROM insert_type_parallels WHERE parallel_id = ?").get(pId);
+    assert.equal(row, undefined);
+  });
+});
+
+
+// ============================================================
+// card_parallels Table
+// ============================================================
+describe('card_parallels', () => {
+  it('table exists and accepts inserts', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('CP Test', 2025)").run().lastInsertRowid;
+    const cardId = db.prepare("INSERT INTO cards (set_id, card_number, player) VALUES (?, '1', 'Test Player')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Gold')").run(setId).lastInsertRowid;
+
+    const result = db.prepare("INSERT INTO card_parallels (card_id, parallel_id, qty) VALUES (?, ?, 3)").run(cardId, pId);
+    assert.ok(result.lastInsertRowid);
+
+    const row = db.prepare("SELECT * FROM card_parallels WHERE id = ?").get(result.lastInsertRowid);
+    assert.equal(row.card_id, cardId);
+    assert.equal(row.parallel_id, pId);
+    assert.equal(row.qty, 3);
+  });
+
+  it('qty defaults to 1', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('CP Default', 2025)").run().lastInsertRowid;
+    const cardId = db.prepare("INSERT INTO cards (set_id, card_number, player) VALUES (?, '1', 'Default Qty')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Silver')").run(setId).lastInsertRowid;
+
+    const result = db.prepare("INSERT INTO card_parallels (card_id, parallel_id) VALUES (?, ?)").run(cardId, pId);
+    const row = db.prepare("SELECT * FROM card_parallels WHERE id = ?").get(result.lastInsertRowid);
+    assert.equal(row.qty, 1);
+  });
+
+  it('enforces UNIQUE(card_id, parallel_id)', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('CP Unique', 2025)").run().lastInsertRowid;
+    const cardId = db.prepare("INSERT INTO cards (set_id, card_number, player) VALUES (?, '1', 'Uniq')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Red')").run(setId).lastInsertRowid;
+
+    db.prepare("INSERT INTO card_parallels (card_id, parallel_id) VALUES (?, ?)").run(cardId, pId);
+    assert.throws(() => {
+      db.prepare("INSERT INTO card_parallels (card_id, parallel_id) VALUES (?, ?)").run(cardId, pId);
+    });
+  });
+
+  it('CASCADE delete — deleting card removes card_parallels rows', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('CP Cascade Card', 2025)").run().lastInsertRowid;
+    const cardId = db.prepare("INSERT INTO cards (set_id, card_number, player) VALUES (?, '1', 'Gone')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Green')").run(setId).lastInsertRowid;
+
+    db.prepare("INSERT INTO card_parallels (card_id, parallel_id) VALUES (?, ?)").run(cardId, pId);
+
+    // Verify row exists
+    let row = db.prepare("SELECT * FROM card_parallels WHERE card_id = ?").get(cardId);
+    assert.ok(row);
+
+    // Delete the card — should cascade
+    db.prepare("DELETE FROM cards WHERE id = ?").run(cardId);
+
+    row = db.prepare("SELECT * FROM card_parallels WHERE card_id = ?").get(cardId);
+    assert.equal(row, undefined);
+  });
+
+  it('CASCADE delete — deleting parallel removes card_parallels rows', () => {
+    const setId = db.prepare("INSERT INTO card_sets (name, year) VALUES ('CP Cascade Par', 2025)").run().lastInsertRowid;
+    const cardId = db.prepare("INSERT INTO cards (set_id, card_number, player) VALUES (?, '1', 'Stay')").run(setId).lastInsertRowid;
+    const pId = db.prepare("INSERT INTO set_parallels (set_id, name) VALUES (?, 'Purple')").run(setId).lastInsertRowid;
+
+    db.prepare("INSERT INTO card_parallels (card_id, parallel_id) VALUES (?, ?)").run(cardId, pId);
+
+    // Delete the parallel — should cascade
+    db.prepare("DELETE FROM set_parallels WHERE id = ?").run(pId);
+
+    const row = db.prepare("SELECT * FROM card_parallels WHERE parallel_id = ?").get(pId);
+    assert.equal(row, undefined);
+  });
+});

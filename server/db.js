@@ -240,6 +240,31 @@ function openDb(dbPath) {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_insert_type ON price_history(insert_type_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_snapshots_insert_type ON price_snapshots(insert_type_id, snapshot_date)`); } catch(e) {}
 
+  // Migration: insert_type_parallels junction table (which parallels belong to which insert type)
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS insert_type_parallels (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        insert_type_id  INTEGER NOT NULL REFERENCES set_insert_types(id) ON DELETE CASCADE,
+        parallel_id     INTEGER NOT NULL REFERENCES set_parallels(id) ON DELETE CASCADE,
+        UNIQUE(insert_type_id, parallel_id)
+      )
+    `);
+  } catch (_) { /* table already exists */ }
+
+  // Migration: card_parallels table (which parallels the user owns for a specific card)
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS card_parallels (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_id     INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+        parallel_id INTEGER NOT NULL REFERENCES set_parallels(id) ON DELETE CASCADE,
+        qty         INTEGER DEFAULT 1,
+        UNIQUE(card_id, parallel_id)
+      )
+    `);
+  } catch (_) { /* table already exists */ }
+
   return db;
 }
 
