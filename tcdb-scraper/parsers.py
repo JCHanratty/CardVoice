@@ -265,6 +265,26 @@ def parse_next_page_url(html: str) -> Optional[str]:
     return None
 
 
+_PAGE_INDEX_RE = re.compile(r"\?PageIndex=(\d+)")
+
+
+def parse_max_page_index(html: str) -> int:
+    """Find the highest PageIndex from pagination links on a Checklist page.
+
+    TCDB Checklist pages paginate via ``?PageIndex=N`` links.
+    Returns 1 if no pagination links are found (single-page set).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    max_page = 1
+    for anchor in soup.find_all("a", href=_PAGE_INDEX_RE):
+        m = _PAGE_INDEX_RE.search(anchor["href"])
+        if m:
+            page = int(m.group(1))
+            if page > max_page:
+                max_page = page
+    return max_page
+
+
 # ---------------------------------------------------------------------------
 # Sub-set expansion (AJAX endpoint)
 # ---------------------------------------------------------------------------

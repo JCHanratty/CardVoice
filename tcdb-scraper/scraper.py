@@ -26,7 +26,8 @@ from db_helper import (create_catalog_db, insert_set, insert_card,
 from http_client import TcdbClient
 from checkpoint import Checkpoint
 from parsers import (parse_set_list_page, parse_set_detail_page,
-                     parse_next_page_url, parse_sub_set_list)
+                     parse_next_page_url, parse_sub_set_list,
+                     parse_max_page_index)
 from utils import extract_brand
 
 load_dotenv()
@@ -131,14 +132,27 @@ def prioritize_sets(all_sets: list[dict]) -> list[dict]:
 
 
 def scrape_set_cards(client: TcdbClient, tcdb_id: int, url_slug: str) -> dict:
-    """Fetch the checklist page for a set and parse cards.
+    """Fetch all checklist pages for a set and parse cards.
 
-    Uses /Checklist.cfm which shows ALL cards on one page (unlike
-    /ViewSet.cfm which paginates at ~10).
+    TCDB's Checklist.cfm paginates at ~100 cards per page via
+    ``?PageIndex=N`` query parameters. This function fetches all pages
+    and merges the card lists.
     """
-    url = f"{TCDB_BASE}/Checklist.cfm/sid/{tcdb_id}/{url_slug}"
-    resp = client.get(url)
-    return parse_set_detail_page(resp.text)
+    base_url = f"{TCDB_BASE}/Checklist.cfm/sid/{tcdb_id}/{url_slug}"
+    resp = client.get(base_url)
+    result = parse_set_detail_page(resp.text)
+    max_page = parse_max_page_index(resp.text)
+
+    if max_page > 1:
+        logger.info(f"  Checklist has {max_page} pages, fetching remaining...")
+        for page in range(2, max_page + 1):
+            page_url = f"{base_url}?PageIndex={page}"
+            page_resp = client.get(page_url)
+            page_result = parse_set_detail_page(page_resp.text)
+            result["cards"].extend(page_result.get("cards", []))
+            logger.info(f"  Page {page}/{max_page}: +{len(page_result.get('cards', []))} cards (total: {len(result['cards'])})")
+
+    return result
 
 
 def download_image(client: TcdbClient, image_url: str, local_path: Path) -> bool:
