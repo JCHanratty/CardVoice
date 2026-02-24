@@ -31,6 +31,8 @@ export default function SetDetail() {
   const [activeInsertType, setActiveInsertType] = useState('');
   const [activeParallel, setActiveParallel] = useState('');
 
+  const [showAllParallels, setShowAllParallels] = useState(false);
+
   const [trackedCards, setTrackedCards] = useState({});
   const [setPrice, setSetPrice] = useState(null);
   const [setSnapshots, setSetSnapshots] = useState([]);
@@ -104,6 +106,11 @@ export default function SetDetail() {
     };
   }, [setId]);
 
+  // Reset parallel selection when insert type changes
+  useEffect(() => {
+    setActiveParallel('');
+  }, [activeInsertType]);
+
   const deleteCard = async (cardId) => {
     if (!window.confirm('Delete this card?')) return;
     try {
@@ -170,6 +177,17 @@ export default function SetDetail() {
       setCards(prev => prev.map(c => c.id === cardId ? { ...c, qty } : c));
     } catch (err) {
       console.error('Qty update failed:', err);
+    }
+  };
+
+  const handleParallelQty = async (cardId, parallelId, qty) => {
+    try {
+      await axios.put(`${API}/api/cards/${cardId}/parallels`, { parallel_id: parallelId, qty });
+      // Refresh card data
+      const res = await axios.get(`${API}/api/sets/${setId}`);
+      setCards(res.data.cards || []);
+    } catch (err) {
+      console.error('Failed to update parallel qty:', err);
     }
   };
 
@@ -255,6 +273,10 @@ export default function SetDetail() {
 
   const hasMetadata = metadata.insertTypes.length > 0;
 
+  // Derive available parallels from the selected insert type's nested parallels
+  const activeInsertTypeObj = metadata.insertTypes.find(t => t.name === activeInsertType);
+  const availableParallels = activeInsertTypeObj?.parallels || [];
+
   const cardNumSort = (cn) => {
     const m = (cn || '').match(/(\d+)/);
     return m ? parseInt(m[1], 10) : 0;
@@ -289,6 +311,13 @@ export default function SetDetail() {
     if (pA !== pB) return pA.localeCompare(pB);
     return cardNumSort(b.card_number) - cardNumSort(a.card_number);
   });
+
+  // Compute which parallel columns to show in the table
+  const ownedParallelNames = new Set();
+  filtered.forEach(c => c.owned_parallels?.forEach(op => ownedParallelNames.add(op.name)));
+  const parallelColumns = showAllParallels
+    ? availableParallels
+    : availableParallels.filter(p => ownedParallelNames.has(p.name));
 
   // Stats
   const totalCards = cards.length;
@@ -636,13 +665,21 @@ export default function SetDetail() {
             <select value={activeParallel} onChange={e => setActiveParallel(e.target.value)}
               className="bg-cv-panel border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text focus:border-cv-accent focus:outline-none min-w-[160px]">
               <option value="">Base</option>
-              {metadata.parallels.map(p => (
-                <option key={p.name} value={p.name}>
+              {availableParallels.map(p => (
+                <option key={p.id} value={p.name}>
                   {p.name}{p.print_run ? ` /${p.print_run}` : ''}{p.exclusive ? ` (${p.exclusive})` : ''}
                 </option>
               ))}
             </select>
           </div>
+          {availableParallels.length > 0 && (
+            <div className="flex items-end">
+              <button onClick={() => setShowAllParallels(!showAllParallels)}
+                className="px-3 py-2 rounded-lg text-xs font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all">
+                {showAllParallels ? 'Show owned only' : `Rainbow (${availableParallels.length})`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -726,6 +763,9 @@ export default function SetDetail() {
               <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Insert Type</th>
               <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Parallel</th>
               <th className="text-center px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Qty</th>
+              {parallelColumns.map(p => (
+                <th key={p.id} className="text-center px-2 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold whitespace-nowrap">{p.name}</th>
+              ))}
               <th className="text-center px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-20">Actions</th>
               <th className="text-right px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Price</th>
             </tr>
@@ -744,7 +784,7 @@ export default function SetDetail() {
               const allGroupOwned = stats.have === stats.cards && stats.cards > 0;
               const groupHeader = newParallel ? (
                 <tr key={`grp-${idx}`} className="bg-cv-accent/[0.03]">
-                  <td colSpan="10" className="px-3 py-1.5 text-xs font-semibold">
+                  <td colSpan={10 + parallelColumns.length} className="px-3 py-1.5 text-xs font-semibold">
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-cv-accent">{card.insert_type || 'Base'}</span>
@@ -778,6 +818,7 @@ export default function SetDetail() {
                   <td className="px-3 py-1.5 text-xs text-cv-accent font-mono">{card.insert_type || 'Base'}</td>
                   <td className="px-3 py-1.5 text-xs text-cv-gold font-mono">{card.parallel || '--'}</td>
                   <td className="px-3 py-1.5 text-xs text-cv-gold font-mono text-center font-bold" title="Total copies">{stats.qty}</td>
+                  {parallelColumns.map(p => <td key={p.id}></td>)}
                   <td></td>
                   <td></td>
                 </tr>
@@ -816,6 +857,7 @@ export default function SetDetail() {
                       <input type="number" value={editForm.qty} onChange={e => setEditForm({...editForm, qty: parseInt(e.target.value) || 0})}
                         className="w-16 bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text text-center focus:outline-none" />
                     </td>
+                    {parallelColumns.map(p => <td key={p.id}></td>)}
                     <td className="px-2 py-1 text-center">
                       <div className="flex items-center justify-center gap-1">
                         <button onClick={() => saveEdit(card.id)} className="p-1 rounded text-cv-accent hover:bg-cv-accent/20"><Check size={14} /></button>
@@ -865,6 +907,21 @@ export default function SetDetail() {
                         </button>
                       </div>
                     </td>
+                    {parallelColumns.map(p => {
+                      const owned = card.owned_parallels?.find(op => op.parallel_id === p.id);
+                      const qty = owned?.qty || 0;
+                      return (
+                        <td key={p.id} className="text-center px-2 py-2">
+                          <button
+                            onClick={() => handleParallelQty(card.id, p.id, qty + 1)}
+                            onContextMenu={(e) => { e.preventDefault(); if (qty > 0) handleParallelQty(card.id, p.id, qty - 1); }}
+                            className={`w-8 h-6 rounded text-xs font-mono ${qty > 0 ? 'bg-cv-gold/20 text-cv-gold border border-cv-gold/30' : 'bg-cv-dark/30 text-cv-muted/30 border border-cv-border/30 hover:border-cv-accent/30'}`}
+                          >
+                            {qty || '\u00b7'}
+                          </button>
+                        </td>
+                      );
+                    })}
                     <td className="px-3 py-2 text-center">
                       <div className="flex items-center justify-center gap-1">
                         <button onClick={() => startEdit(card)} className="p-1 rounded text-cv-muted hover:text-cv-accent hover:bg-cv-accent/10 transition-all"><Pencil size={13} /></button>
@@ -888,7 +945,7 @@ export default function SetDetail() {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan="10" className="text-center py-8 text-cv-muted">
+                <td colSpan={10 + parallelColumns.length} className="text-center py-8 text-cv-muted">
                   {cards.length === 0 ? 'No cards in this set yet' : 'No cards match your search/filter'}
                 </td>
               </tr>
@@ -904,6 +961,7 @@ export default function SetDetail() {
                 <td className="px-3 py-2.5 text-center text-sm text-cv-gold font-mono font-bold" title="Total copies">
                   {filtered.reduce((s, c) => s + (c.qty || 0), 0)}
                 </td>
+                {parallelColumns.map(p => <td key={p.id}></td>)}
                 <td></td>
                 <td></td>
               </tr>
