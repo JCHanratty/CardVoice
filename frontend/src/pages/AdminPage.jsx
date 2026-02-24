@@ -26,6 +26,7 @@ export default function AdminPage() {
   // Update state
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateMsg, setUpdateMsg] = useState('');
+  const [updateDownloaded, setUpdateDownloaded] = useState(false);
 
   const [showImportModal, setShowImportModal] = useState(false);
   const logEndRef = useRef(null);
@@ -45,6 +46,7 @@ export default function AdminPage() {
     window.electronAPI.onUpdateDownloaded?.((info) => {
       setUpdateMsg(`v${info.version} ready — restart to install`);
       setUpdateChecking(false);
+      setUpdateDownloaded(true);
     });
     window.electronAPI.onUpdateError?.((err) => {
       setUpdateMsg(`Update failed: ${err.message}`);
@@ -186,7 +188,17 @@ export default function AdminPage() {
           </button>
         </div>
         {updateMsg && (
-          <div className="mt-3 text-sm text-cv-muted">{updateMsg}</div>
+          <div className="mt-3 flex items-center gap-3">
+            <span className="text-sm text-cv-muted">{updateMsg}</span>
+            {updateDownloaded && (
+              <button
+                onClick={() => window.electronAPI?.quitAndInstall()}
+                className="px-4 py-1.5 rounded-lg text-sm font-medium bg-gradient-to-r from-cv-accent to-cv-accent2 text-white hover:shadow-lg hover:shadow-cv-accent/20 transition-all"
+              >
+                Install & Restart
+              </button>
+            )}
+          </div>
         )}
       </div>
 

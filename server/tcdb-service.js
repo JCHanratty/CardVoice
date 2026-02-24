@@ -10,7 +10,7 @@ class TcdbService {
   constructor(opts = {}) {
     this.scraperDir = opts.scraperDir || path.join(__dirname, '..', 'tcdb-scraper');
     this.outputDir = opts.outputDir || path.join(this.scraperDir, 'output');
-    this.python = opts.python || 'python';
+    this.python = opts.python || TcdbService._findPython();
     this.db = opts.db || null;
 
     // Ensure output directory exists and is writable
@@ -181,6 +181,35 @@ class TcdbService {
       this._process.kill('SIGTERM');
       this._status = { running: false, phase: 'idle', progress: null, result: null, error: 'Cancelled' };
     }
+  }
+
+  static _findPython() {
+    const { execSync } = require('child_process');
+
+    // Try common commands
+    for (const cmd of ['python', 'python3', 'py']) {
+      try {
+        execSync(`${cmd} --version`, { stdio: 'ignore', timeout: 5000 });
+        return cmd;
+      } catch (_) { /* not found */ }
+    }
+
+    // Try common Windows install paths
+    const home = process.env.LOCALAPPDATA || '';
+    if (home) {
+      try {
+        const pyDir = path.join(home, 'Programs', 'Python');
+        if (fs.existsSync(pyDir)) {
+          const versions = fs.readdirSync(pyDir).filter(d => d.startsWith('Python')).sort().reverse();
+          for (const ver of versions) {
+            const pyExe = path.join(pyDir, ver, 'python.exe');
+            if (fs.existsSync(pyExe)) return pyExe;
+          }
+        }
+      } catch (_) { /* not found */ }
+    }
+
+    return 'python'; // fallback, will error at spawn time
   }
 }
 

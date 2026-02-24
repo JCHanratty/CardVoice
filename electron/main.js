@@ -134,9 +134,35 @@ function setupAutoUpdater() {
  * The NSIS installer handles relaunching the app after install
  * (runAfterFinish: true in package.json nsis config).
  */
+function findDownloadedInstaller() {
+  // 1. Use the path from electron-updater if available
+  if (downloadedInstallerPath && fs.existsSync(downloadedInstallerPath)) {
+    return downloadedInstallerPath;
+  }
+
+  // 2. Search the electron-updater cache directory for .exe files
+  const cacheDir = path.join(app.getPath('userData'), '..', 'cardvoice-updater', 'pending');
+  console.log('[Update] Searching updater cache:', cacheDir);
+  try {
+    if (fs.existsSync(cacheDir)) {
+      const files = fs.readdirSync(cacheDir).filter(f => f.endsWith('.exe') && !f.startsWith('temp-'));
+      if (files.length > 0) {
+        const found = path.join(cacheDir, files[0]);
+        console.log('[Update] Found installer in cache:', found);
+        return found;
+      }
+    }
+  } catch (e) {
+    console.error('[Update] Cache search failed:', e.message);
+  }
+
+  return null;
+}
+
 function quitAndInstallViaScript() {
-  if (!downloadedInstallerPath || !fs.existsSync(downloadedInstallerPath)) {
-    console.error('[Update] No downloaded installer found at:', downloadedInstallerPath);
+  const installerPath = findDownloadedInstaller();
+  if (!installerPath) {
+    console.error('[Update] No downloaded installer found. downloadedInstallerPath was:', downloadedInstallerPath);
     // Last resort fallback — try the broken quitAndInstall
     autoUpdater.quitAndInstall(true, true);
     setTimeout(() => app.exit(0), 3000);
@@ -152,7 +178,7 @@ function quitAndInstallViaScript() {
   const logPath = path.join(updatesDir, 'update.log');
 
   // Windows paths need backslashes in bat scripts
-  const installerWin = downloadedInstallerPath.replace(/\//g, '\\');
+  const installerWin = installerPath.replace(/\//g, '\\');
   const logWin = logPath.replace(/\//g, '\\');
 
   const batScript = `@echo off
@@ -182,11 +208,6 @@ echo [%date% %time%] Running: "%INSTALLER%" /S --updated >> "%LOG%"
 "%INSTALLER%" /S --updated
 
 echo [%date% %time%] Installer finished (exit code: %ERRORLEVEL%) >> "%LOG%"
-
-REM Self-cleanup after a short delay
-timeout /t 5 /nobreak >nul
-del /F /Q "%LOG%" 2>nul
-(goto) 2>nul & del /F /Q "%~f0"
 `;
 
   // VBScript runs the bat completely invisible (no terminal flash)
@@ -197,7 +218,7 @@ del /F /Q "%LOG%" 2>nul
   fs.writeFileSync(vbsPath, vbsScript, 'utf-8');
 
   console.log('[Update] Spawning update script:', vbsPath);
-  console.log('[Update] Installer path:', downloadedInstallerPath);
+  console.log('[Update] Installer path:', installerPath);
   console.log('[Update] PID to watch:', pid);
 
   // Spawn the invisible VBScript wrapper (fully detached)
