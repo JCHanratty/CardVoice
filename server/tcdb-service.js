@@ -61,6 +61,7 @@ class TcdbService {
       progress: { current: 0, total: 3, currentItem: 'Scraping base cards...' },
       result: null,
       error: null,
+      startedAt: Date.now(),
     };
 
     try {
@@ -87,6 +88,7 @@ class TcdbService {
         progress: { current: 3, total: 3, currentItem: 'Complete' },
         result: { scrape: scrapeResult, merge: mergeResult },
         error: null,
+        startedAt: this._status.startedAt,
       };
 
       return this._status.result;
@@ -97,6 +99,7 @@ class TcdbService {
         progress: null,
         result: null,
         error: err.message,
+        startedAt: this._status.startedAt,
       };
       throw err;
     }
