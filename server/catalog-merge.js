@@ -86,6 +86,7 @@ function mergeCatalog(db, opts = {}) {
       cards: { added: 0, updated: 0 },
       insertTypes: { added: 0 },
       parallels: { added: 0 },
+      junctions: { added: 0 },
     };
 
     // Prepared statements for user DB
@@ -114,6 +115,18 @@ function mergeCatalog(db, opts = {}) {
         channels = CASE WHEN excluded.channels != '' THEN excluded.channels ELSE set_parallels.channels END,
         variation_type = CASE WHEN excluded.variation_type != 'parallel' THEN excluded.variation_type ELSE set_parallels.variation_type END
     `);
+
+    const findUserInsertType = db.prepare('SELECT id FROM set_insert_types WHERE set_id = ? AND name = ?');
+    const findUserParallel = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ?');
+    const upsertJunction = db.prepare('INSERT OR IGNORE INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)');
+
+    // Check if catalog DB has the insert_type_parallels junction table
+    const hasJunction = (() => {
+      try {
+        catalogDb.prepare('SELECT 1 FROM insert_type_parallels LIMIT 1').get();
+        return true;
+      } catch (_) { return false; }
+    })();
 
     const catalogSets = catalogDb.prepare('SELECT * FROM card_sets ORDER BY id').all();
 
@@ -148,6 +161,27 @@ function mergeCatalog(db, opts = {}) {
         for (const p of catParallels) {
           upsertParallel.run(userSetId, p.name, p.print_run, p.exclusive, p.notes, p.serial_max, p.channels, p.variation_type);
           results.parallels.added++;
+        }
+
+        // Merge insert_type_parallels junction
+        if (hasJunction) {
+          const catJunctions = catalogDb.prepare(`
+            SELECT itp.insert_type_id as cat_it_id, itp.parallel_id as cat_p_id,
+                   sit.name as it_name, sp.name as p_name
+            FROM insert_type_parallels itp
+            JOIN set_insert_types sit ON sit.id = itp.insert_type_id
+            JOIN set_parallels sp ON sp.id = itp.parallel_id
+            WHERE sit.set_id = ?
+          `).all(catSet.id);
+
+          for (const junc of catJunctions) {
+            const userIt = findUserInsertType.get(userSetId, junc.it_name);
+            const userP = findUserParallel.get(userSetId, junc.p_name);
+            if (userIt && userP) {
+              upsertJunction.run(userIt.id, userP.id);
+              results.junctions.added++;
+            }
+          }
         }
 
         // Merge cards — NEVER touch qty
