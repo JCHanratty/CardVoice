@@ -1,9 +1,12 @@
 const { app, BrowserWindow, shell, ipcMain, Menu, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
 let serverHandle; // { app, server, db } from createServer()
+let downloadedInstallerPath = null; // Cached path from electron-updater
 const BACKEND_PORT = 8000;
 
 // ============================================================
@@ -46,16 +49,39 @@ function startBackend() {
 }
 
 // ============================================================
-// Auto-Update
+// Update cleanup — remove leftover update scripts on startup
+// ============================================================
+
+function cleanupUpdateArtifacts() {
+  const updatesDir = path.join(app.getPath('temp'), 'cardvoice-update');
+  if (fs.existsSync(updatesDir)) {
+    try {
+      fs.rmSync(updatesDir, { recursive: true, force: true });
+      console.log('[Update] Cleaned up update artifacts');
+    } catch (e) {
+      console.warn('[Update] Could not clean update artifacts:', e.message);
+    }
+  }
+}
+
+// ============================================================
+// Auto-Update — uses electron-updater for check/download,
+// but CPR-Tracker-style external script for the actual install.
+//
+// Why: autoUpdater.quitAndInstall() is broken on Windows.
+// The NSIS installer starts before Electron fully exits,
+// causing "cannot be closed" errors and infinite loops.
+// Instead, we spawn an external .bat script that waits for
+// our PID to die, THEN runs the installer silently.
 // ============================================================
 
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false; // We handle install ourselves
   autoUpdater.disableDifferentialDownload = true;
 
   autoUpdater.on('update-available', (info) => {
-    console.log('Update available:', info.version);
+    console.log('[Update] Update available:', info.version);
     if (mainWindow) {
       mainWindow.webContents.send('update-available', info);
     }
@@ -73,25 +99,128 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('Update downloaded:', info.version);
+    // Capture the downloaded installer path from electron-updater
+    downloadedInstallerPath = info.downloadedFile || null;
+    console.log('[Update] Update downloaded:', info.version, 'at', downloadedInstallerPath);
     if (mainWindow) {
       mainWindow.webContents.send('update-downloaded', info);
     }
   });
 
   autoUpdater.on('error', (err) => {
-    console.error('Auto-update error:', err.message);
+    console.error('[Update] Auto-update error:', err.message);
     if (mainWindow) {
       mainWindow.webContents.send('update-error', { message: err.message });
     }
   });
 
-  autoUpdater.checkForUpdates();
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[Update] Initial check failed:', err.message);
+  });
 
   // Re-check every 30 minutes while the app is running
   setInterval(() => {
     autoUpdater.checkForUpdates().catch(() => {});
   }, 30 * 60 * 1000);
+}
+
+/**
+ * CPR-Tracker-style quit-and-install:
+ * 1. Write a .bat script that waits for our PID to die
+ * 2. .bat runs the NSIS installer silently (/S --updated)
+ * 3. Spawn .bat via invisible VBScript wrapper
+ * 4. Hard-exit with app.exit(0)
+ *
+ * The NSIS installer handles relaunching the app after install
+ * (runAfterFinish: true in package.json nsis config).
+ */
+function quitAndInstallViaScript() {
+  if (!downloadedInstallerPath || !fs.existsSync(downloadedInstallerPath)) {
+    console.error('[Update] No downloaded installer found at:', downloadedInstallerPath);
+    // Last resort fallback — try the broken quitAndInstall
+    autoUpdater.quitAndInstall(true, true);
+    setTimeout(() => app.exit(0), 3000);
+    return;
+  }
+
+  const pid = process.pid;
+  const updatesDir = path.join(app.getPath('temp'), 'cardvoice-update');
+  fs.mkdirSync(updatesDir, { recursive: true });
+
+  const batPath = path.join(updatesDir, 'update.bat');
+  const vbsPath = path.join(updatesDir, 'update.vbs');
+  const logPath = path.join(updatesDir, 'update.log');
+
+  // Windows paths need backslashes in bat scripts
+  const installerWin = downloadedInstallerPath.replace(/\//g, '\\');
+  const logWin = logPath.replace(/\//g, '\\');
+
+  const batScript = `@echo off
+set "INSTALLER=${installerWin}"
+set "LOG=${logWin}"
+set "OLD_PID=${pid}"
+
+echo [%date% %time%] CardVoice update script started >> "%LOG%"
+echo [%date% %time%] Waiting for PID %OLD_PID% to exit... >> "%LOG%"
+
+REM Wait for old process to exit (up to 30 seconds)
+set /a TRIES=0
+:waitloop
+tasklist /FI "PID eq %OLD_PID%" 2>nul | find /i "%OLD_PID%" >nul 2>&1
+if errorlevel 1 goto done_waiting
+if %TRIES% GEQ 30 goto done_waiting
+timeout /t 1 /nobreak >nul
+set /a TRIES+=1
+goto waitloop
+:done_waiting
+
+timeout /t 2 /nobreak >nul
+echo [%date% %time%] Process exited, running installer >> "%LOG%"
+
+REM Run the NSIS installer silently with --updated flag
+echo [%date% %time%] Running: "%INSTALLER%" /S --updated >> "%LOG%"
+"%INSTALLER%" /S --updated
+
+echo [%date% %time%] Installer finished (exit code: %ERRORLEVEL%) >> "%LOG%"
+
+REM Self-cleanup after a short delay
+timeout /t 5 /nobreak >nul
+del /F /Q "%LOG%" 2>nul
+(goto) 2>nul & del /F /Q "%~f0"
+`;
+
+  // VBScript runs the bat completely invisible (no terminal flash)
+  const batPathEscaped = batPath.replace(/\\/g, '\\\\');
+  const vbsScript = `CreateObject("Wscript.Shell").Run "cmd /c """"${batPathEscaped}""""", 0, False\n`;
+
+  fs.writeFileSync(batPath, batScript, 'utf-8');
+  fs.writeFileSync(vbsPath, vbsScript, 'utf-8');
+
+  console.log('[Update] Spawning update script:', vbsPath);
+  console.log('[Update] Installer path:', downloadedInstallerPath);
+  console.log('[Update] PID to watch:', pid);
+
+  // Spawn the invisible VBScript wrapper (fully detached)
+  const child = spawn('wscript', ['//B', vbsPath], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+
+  // Close server/DB before exiting
+  if (serverHandle) {
+    try { serverHandle.server.close(); } catch (e) {}
+    try { serverHandle.db.close(); } catch (e) {}
+    serverHandle = null;
+  }
+
+  // Hard exit — os-level, no event handlers, guaranteed termination.
+  // The bat script is already running detached and will wait for us to die.
+  setTimeout(() => {
+    console.log('[Update] Hard exiting for update...');
+    app.exit(0);
+  }, 500);
 }
 
 // ============================================================
@@ -274,15 +403,7 @@ function createWindow() {
 ipcMain.handle('get-app-version', () => app.getVersion());
 
 ipcMain.handle('quit-and-install', () => {
-  // Close server/DB first so app.quit() doesn't hang
-  if (serverHandle) {
-    try { serverHandle.server.close(); } catch (e) {}
-    try { serverHandle.db.close(); } catch (e) {}
-    serverHandle = null;
-  }
-  // Use isSilent=false so NSIS can handle the close properly,
-  // isForceRunAfter=true to relaunch after install
-  autoUpdater.quitAndInstall(false, true);
+  quitAndInstallViaScript();
 });
 
 ipcMain.handle('check-for-updates', async () => {
@@ -300,6 +421,8 @@ ipcMain.handle('check-for-updates', async () => {
 
 app.whenReady().then(() => {
   console.log('Starting CardVoice...');
+
+  cleanupUpdateArtifacts();
 
   try {
     startBackend();
