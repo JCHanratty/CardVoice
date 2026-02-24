@@ -21,7 +21,7 @@ class TcdbClient:
 
     BASE_URL = "https://www.tcdb.com"
 
-    def __init__(self, *, min_delay: float = 3.0, max_delay: float = 8.0,
+    def __init__(self, *, min_delay: float = 1.5, max_delay: float = 3.5,
                  retry_wait: float = 30.0, max_retries: int = 3,
                  timeout: float = 30.0):
         self.min_delay = min_delay

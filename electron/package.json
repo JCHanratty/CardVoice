@@ -1,6 +1,6 @@
 {
   "name": "cardvoice",
-  "version": "1.4.7",
+  "version": "1.4.8",
   "description": "Voice-powered sports card collection manager",
   "main": "main.js",
   "scripts": {

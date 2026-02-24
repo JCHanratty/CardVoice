@@ -225,6 +225,13 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
     # Build insert names list for parallel normalization
     insert_names = [s["name"] for s in sub_sets if not _is_parallel(s["name"])]
 
+    # Track (insert_type, parallel) combos already scraped to skip duplicates.
+    # Multiple TCDB sub-sets can normalize to the same parallel name
+    # (e.g. "Stars of MLB Red Foil" and "Chrome Prospects Red Foil" both → "Red Foil"),
+    # making repeated HTTP fetches pointless since all DB inserts would be dupes.
+    scraped_keys: set[tuple[str, str]] = set()
+    skipped = 0
+
     for idx, sub in enumerate(sub_sets, 1):
         sub_tcdb_id = sub["tcdb_id"]
         sub_name = sub["name"]
@@ -233,11 +240,31 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
         # Classify as insert or parallel based on naming
         is_parallel = _is_parallel(sub_name)
         kind = "parallel" if is_parallel else "insert"
-        logger.info(f"  [{idx}/{len(sub_sets)}] Scraping {kind}: {sub_name}")
 
         if is_parallel:
             # Normalize: "Stars of MLB Red Foil" → "Red Foil"
             normalized = _normalize_parallel_name(sub_name, insert_names)
+            insert_type = "Base"
+            parallel = normalized
+        else:
+            insert_type = sub_name
+            parallel = ""
+
+        # Skip if we already scraped this exact (insert_type, parallel) combo
+        key = (insert_type, parallel.lower())
+        if key in scraped_keys:
+            skipped += 1
+            logger.info(f"  [{idx}/{len(sub_sets)}] Skipping duplicate {kind}: {sub_name} (already have \"{parallel or insert_type}\")")
+            # Still register the parallel/insert type name
+            if is_parallel:
+                upsert_parallel(conn, set_id=set_id, name=normalized)
+            else:
+                upsert_insert_type(conn, set_id=set_id, name=sub_name)
+            continue
+
+        logger.info(f"  [{idx}/{len(sub_sets)}] Scraping {kind}: {sub_name}")
+
+        if is_parallel:
             upsert_parallel(conn, set_id=set_id, name=normalized)
         else:
             upsert_insert_type(conn, set_id=set_id, name=sub_name)
@@ -247,9 +274,6 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
             sub_result = scrape_set_cards(client, sub_tcdb_id, sub_slug)
             sub_cards = sub_result.get("cards", [])
 
-            insert_type = "Base" if is_parallel else sub_name
-            parallel = normalized if is_parallel else ""
-
             sub_count = _process_cards(
                 client, conn, set_id, sub_tcdb_id, sub_cards,
                 insert_type=insert_type, parallel=parallel,
@@ -257,6 +281,7 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
                 download_images=download_images,
             )
 
+            scraped_keys.add(key)
             logger.info(f"    {sub_count} cards added")
             sub_set_summaries.append({
                 "name": sub_name,
@@ -269,7 +294,7 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
             sub_set_summaries.append({"name": sub_name, "cards": 0, "error": str(e)})
 
     update_set_total(conn, set_id)
-    logger.info(f"  Done: {total_cards} total cards ({len(sub_set_summaries)} sub-sets)")
+    logger.info(f"  Done: {total_cards} total cards ({len(sub_set_summaries)} sub-sets scraped, {skipped} duplicates skipped)")
 
     return {
         "name": name,
