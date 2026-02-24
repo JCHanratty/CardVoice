@@ -282,7 +282,8 @@ function createRoutes(db) {
   // PUT /api/cards/:cardId/parallels — set or remove parallel qty for a card
   router.put('/api/cards/:cardId/parallels', (req, res) => {
     const { cardId } = req.params;
-    const { parallel_id, qty } = req.body;
+    const { parallel_id, qty: rawQty } = req.body;
+    const qty = rawQty != null ? rawQty : 1;
     if (!parallel_id) return res.status(400).json({ error: 'parallel_id required' });
     const card = db.prepare('SELECT id FROM cards WHERE id = ?').get(cardId);
     if (!card) return res.status(404).json({ error: 'Card not found' });

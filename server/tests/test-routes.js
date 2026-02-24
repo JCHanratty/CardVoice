@@ -698,6 +698,16 @@ describe('Card Parallels API', () => {
     const row = db.prepare('SELECT * FROM card_parallels WHERE card_id = ? AND parallel_id = ?').get(cardId, pId);
     assert.strictEqual(row, undefined);
   });
+
+  it('returns 400 when parallel_id is missing', async () => {
+    const { status } = await api('PUT', '/api/cards/1/parallels', { qty: 1 });
+    assert.strictEqual(status, 400);
+  });
+
+  it('returns 404 for nonexistent card', async () => {
+    const { status } = await api('PUT', '/api/cards/999999/parallels', { parallel_id: 1, qty: 1 });
+    assert.strictEqual(status, 404);
+  });
 });
 
 
