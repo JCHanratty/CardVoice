@@ -44,6 +44,7 @@ function getCatalogPath(isPackaged) {
  * @param {object} [opts]
  * @param {boolean} [opts.isPackaged] - Whether running packaged
  * @param {string}  [opts.catalogPath] - Override catalog path (for testing)
+ * @param {boolean} [opts.force] - Skip version check (for on-demand TCDB imports)
  * @returns {{ skipped: boolean, reason?: string, added?: object, updated?: object }}
  */
 function mergeCatalog(db, opts = {}) {
@@ -68,7 +69,7 @@ function mergeCatalog(db, opts = {}) {
     const catalogVersion = catalogVersionRow ? catalogVersionRow.value : '0';
     const userVersion = getMeta(db, 'catalog_version') || '0';
 
-    if (!versionIsNewer(catalogVersion, userVersion)) {
+    if (!opts.force && !versionIsNewer(catalogVersion, userVersion)) {
       catalogDb.close();
       return { skipped: true, reason: `Already up to date (user: ${userVersion}, catalog: ${catalogVersion})` };
     }

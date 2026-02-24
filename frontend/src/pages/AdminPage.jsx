@@ -424,7 +424,7 @@ export default function AdminPage() {
               </div>
             )}
 
-            {importStatus?.phase === 'done' && importResult?.merge && (
+            {importStatus?.phase === 'done' && importResult?.merge && !importResult.merge.skipped && (
               <div className="mb-4 p-3 rounded-lg bg-green-900/20 border border-green-500/30">
                 <div className="flex items-center gap-2 mb-2">
                   <CheckCircle size={16} className="text-green-400" />
@@ -442,6 +442,16 @@ export default function AdminPage() {
                   <span className="text-cv-muted">Parallels:</span>
                   <span className="text-cv-text font-mono">{importResult.merge.parallels?.added || 0}</span>
                 </div>
+              </div>
+            )}
+
+            {importStatus?.phase === 'done' && importResult?.merge?.skipped && (
+              <div className="mb-4 p-3 rounded-lg bg-yellow-900/20 border border-yellow-500/30">
+                <div className="flex items-center gap-2 mb-2">
+                  <XCircle size={16} className="text-yellow-400" />
+                  <span className="text-sm font-semibold text-yellow-400">Merge Skipped</span>
+                </div>
+                <div className="text-xs text-cv-muted">{importResult.merge.reason}</div>
               </div>
             )}
 

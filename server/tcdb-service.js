@@ -78,7 +78,7 @@ class TcdbService {
       if (this.db) {
         const { mergeCatalog } = require('./catalog-merge');
         const catalogPath = path.join(this.outputDir, 'tcdb-catalog.db');
-        mergeResult = mergeCatalog(this.db, { catalogPath });
+        mergeResult = mergeCatalog(this.db, { catalogPath, force: true });
       }
 
       // Step 3: Done
