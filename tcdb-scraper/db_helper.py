@@ -87,6 +87,13 @@ def create_catalog_db(db_path: str) -> sqlite3.Connection:
             UNIQUE(set_id, name)
         );
 
+        CREATE TABLE IF NOT EXISTS insert_type_parallels (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            insert_type_id  INTEGER NOT NULL REFERENCES set_insert_types(id) ON DELETE CASCADE,
+            parallel_id     INTEGER NOT NULL REFERENCES set_parallels(id) ON DELETE CASCADE,
+            UNIQUE(insert_type_id, parallel_id)
+        );
+
         CREATE TABLE IF NOT EXISTS app_meta (
             key        TEXT PRIMARY KEY,
             value      TEXT,
@@ -136,7 +143,7 @@ def insert_card(conn: sqlite3.Connection, *, set_id: int, card_number: str,
 def upsert_insert_type(conn: sqlite3.Connection, *, set_id: int, name: str,
                        card_count: int = 0, odds: str = "",
                        section_type: str = "base"):
-    """Insert or update an insert-type row for a set."""
+    """Insert or update an insert-type row for a set. Returns the row id."""
     conn.execute(
         """INSERT INTO set_insert_types (set_id, name, card_count, odds, section_type)
            VALUES (?, ?, ?, ?, ?)
@@ -147,6 +154,11 @@ def upsert_insert_type(conn: sqlite3.Connection, *, set_id: int, name: str,
         (set_id, name, card_count, odds, section_type),
     )
     conn.commit()
+    row = conn.execute(
+        "SELECT id FROM set_insert_types WHERE set_id = ? AND name = ?",
+        (set_id, name),
+    ).fetchone()
+    return row[0] if row else None
 
 
 def upsert_parallel(conn: sqlite3.Connection, *, set_id: int, name: str,
@@ -169,6 +181,21 @@ def upsert_parallel(conn: sqlite3.Connection, *, set_id: int, name: str,
                variation_type = excluded.variation_type""",
         (set_id, name, print_run, exclusive, notes,
          serial_max, channels, variation_type),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id FROM set_parallels WHERE set_id = ? AND name = ?",
+        (set_id, name),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def link_parallel_to_insert(conn: sqlite3.Connection, *, insert_type_id: int, parallel_id: int):
+    """Link a parallel to an insert type (idempotent)."""
+    conn.execute(
+        """INSERT OR IGNORE INTO insert_type_parallels (insert_type_id, parallel_id)
+           VALUES (?, ?)""",
+        (insert_type_id, parallel_id),
     )
     conn.commit()
 

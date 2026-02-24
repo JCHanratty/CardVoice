@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 from db_helper import (create_catalog_db, insert_set, insert_card,
                        upsert_insert_type, upsert_parallel,
+                       link_parallel_to_insert,
                        update_set_total, set_catalog_version)
 from http_client import TcdbClient
 from checkpoint import Checkpoint
@@ -242,6 +243,8 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
     insert_names_registered: set[str] = set()
 
     # --- Pass 1: Register all parallels and insert type names ---
+    insert_ids = {}  # canonical_name_lower -> insert_type_id
+
     for sub in sub_sets:
         sub_name = sub["name"]
 
@@ -250,15 +253,42 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
             norm_key = normalized.lower()
             if norm_key not in parallel_names_seen:
                 parallel_names_seen.add(norm_key)
-                upsert_parallel(conn, set_id=set_id, name=normalized)
+                pid = upsert_parallel(conn, set_id=set_id, name=normalized)
                 parallels_registered += 1
+
+                # Determine parent insert by prefix matching (longest first)
+                parent_insert = "Base"
+                canonical_inserts_sorted = sorted(
+                    {_strip_series_suffix(n) for n in insert_names},
+                    key=len, reverse=True,
+                )
+                stripped = _strip_series_suffix(sub_name)
+                for ins_name in canonical_inserts_sorted:
+                    if stripped.lower().startswith(ins_name.lower()):
+                        parent_insert = ins_name
+                        break
+
+                # Ensure parent insert is registered and get its ID
+                pi_key = parent_insert.lower()
+                if pi_key not in insert_ids:
+                    iid = upsert_insert_type(conn, set_id=set_id, name=parent_insert)
+                    insert_ids[pi_key] = iid
+
+                # Link parallel to parent insert
+                if pid and insert_ids.get(pi_key):
+                    link_parallel_to_insert(
+                        conn,
+                        insert_type_id=insert_ids[pi_key],
+                        parallel_id=pid,
+                    )
         else:
             # Register the canonical (series-stripped) insert name
             canonical = _strip_series_suffix(sub_name)
             canon_key = canonical.lower()
             if canon_key not in insert_names_registered:
                 insert_names_registered.add(canon_key)
-                upsert_insert_type(conn, set_id=set_id, name=canonical)
+                iid = upsert_insert_type(conn, set_id=set_id, name=canonical)
+                insert_ids[canon_key] = iid
 
     logger.info(f"  Registered {parallels_registered} unique parallels, {len(insert_names_registered)} insert types")
 
