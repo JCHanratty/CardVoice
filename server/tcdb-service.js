@@ -70,12 +70,15 @@ class TcdbService {
       if (year) args.push('--year', String(year));
       const scrapeResult = await this._runScraperRaw(args);
 
-      // Step 2: Merge catalog into user DB
+      // Step 2: Merge catalog into user DB (skip if scraper found nothing)
       this._status.phase = 'merging';
       this._status.progress = { current: 2, total: 3, currentItem: 'Merging into CardVoice...' };
 
       let mergeResult = null;
-      if (this.db) {
+      const totalScraped = (scrapeResult?.total_cards || 0) + (scrapeResult?.base_cards || 0);
+      if (totalScraped === 0) {
+        mergeResult = { skipped: true, reason: 'TCDB has no cards for this set yet' };
+      } else if (this.db) {
         const { mergeCatalog } = require('./catalog-merge');
         const catalogPath = path.join(this.outputDir, 'tcdb-catalog.db');
         mergeResult = mergeCatalog(this.db, { catalogPath, force: true });
