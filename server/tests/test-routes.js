@@ -699,3 +699,23 @@ describe('Card Parallels API', () => {
     assert.strictEqual(row, undefined);
   });
 });
+
+
+// ============================================================
+// GET /api/sets/:id includes card_parallels
+// ============================================================
+describe('GET Set with Card Parallels', () => {
+  it('GET /api/sets/:id includes card_parallels', async () => {
+    const set = (await api('POST', '/api/sets', { name: 'GetCP', year: 2025, sport: 'Baseball', brand: 'Topps' })).data;
+    const cardId = db.prepare('INSERT INTO cards (set_id, card_number, player) VALUES (?, ?, ?)').run(set.id, '1', 'Ohtani').lastInsertRowid;
+    const pId = db.prepare('INSERT INTO set_parallels (set_id, name) VALUES (?, ?)').run(set.id, 'Gold').lastInsertRowid;
+    db.prepare('INSERT INTO card_parallels (card_id, parallel_id, qty) VALUES (?, ?, ?)').run(cardId, pId, 3);
+
+    const { data } = await api('GET', `/api/sets/${set.id}`);
+    const card = data.cards.find(c => c.card_number === '1');
+    assert.ok(card.owned_parallels);
+    assert.strictEqual(card.owned_parallels.length, 1);
+    assert.strictEqual(card.owned_parallels[0].name, 'Gold');
+    assert.strictEqual(card.owned_parallels[0].qty, 3);
+  });
+});

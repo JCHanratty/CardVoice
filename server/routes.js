@@ -83,6 +83,24 @@ function createRoutes(db) {
        FROM cards WHERE set_id = ? ORDER BY card_number`
     ).all(setId);
 
+    // Attach owned parallels to each card
+    const cardParallelsRows = db.prepare(`
+      SELECT cp.card_id, cp.qty, sp.id as parallel_id, sp.name
+      FROM card_parallels cp
+      JOIN set_parallels sp ON sp.id = cp.parallel_id
+      WHERE cp.card_id IN (SELECT id FROM cards WHERE set_id = ?)
+    `).all(setId);
+
+    const parallelsByCard = {};
+    for (const row of cardParallelsRows) {
+      if (!parallelsByCard[row.card_id]) parallelsByCard[row.card_id] = [];
+      parallelsByCard[row.card_id].push({ parallel_id: row.parallel_id, name: row.name, qty: row.qty });
+    }
+
+    for (const card of cards) {
+      card.owned_parallels = parallelsByCard[card.id] || [];
+    }
+
     res.json({
       id: cardSet.id,
       name: cardSet.name,
