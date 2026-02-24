@@ -112,16 +112,22 @@ function Layout() {
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateReady, setUpdateReady] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(null);
+  const [updateError, setUpdateError] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (window.electronAPI) {
-      window.electronAPI.onUpdateAvailable((info) => setUpdateInfo(info));
+      window.electronAPI.onUpdateAvailable((info) => { setUpdateInfo(info); setUpdateError(null); });
       window.electronAPI.onDownloadProgress((progress) => setDownloadProgress(progress));
       window.electronAPI.onUpdateDownloaded((info) => {
         setUpdateInfo(info);
         setUpdateReady(true);
         setDownloadProgress(null);
+      });
+      window.electronAPI.onUpdateError?.((err) => {
+        setUpdateError(err.message);
+        setDownloadProgress(null);
+        setUpdateInfo(null);
       });
       window.electronAPI.onMenuAction(({ action, payload }) => {
         switch (action) {
@@ -193,6 +199,17 @@ function Layout() {
               className="h-full bg-gradient-to-r from-cv-accent to-cv-gold transition-all duration-300"
               style={{ width: `${downloadProgress?.percent || 0}%` }}
             />
+          </div>
+        </div>
+      )}
+      {/* Update error banner */}
+      {updateError && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-cv-panel/95 border-b border-red-500/30 backdrop-blur-sm">
+          <div className="px-4 py-2 flex items-center justify-between">
+            <span className="text-sm text-red-400 font-medium">
+              Update failed: {updateError}
+            </span>
+            <button onClick={() => setUpdateError(null)} className="text-xs text-red-400/50 hover:text-red-400">dismiss</button>
           </div>
         </div>
       )}

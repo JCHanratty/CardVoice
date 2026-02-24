@@ -81,6 +81,9 @@ function setupAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     console.error('Auto-update error:', err.message);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', { message: err.message });
+    }
   });
 
   autoUpdater.checkForUpdates();

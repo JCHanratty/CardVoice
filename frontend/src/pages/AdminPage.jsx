@@ -37,19 +37,35 @@ export default function AdminPage() {
     }
     setUpdateChecking(true);
     setUpdateMsg('');
+
+    // Listen for download events so the Admin page can show real status
+    window.electronAPI.onDownloadProgress?.((progress) => {
+      setUpdateMsg(`Downloading update... ${progress.percent}%`);
+    });
+    window.electronAPI.onUpdateDownloaded?.((info) => {
+      setUpdateMsg(`v${info.version} ready — restart to install`);
+      setUpdateChecking(false);
+    });
+    window.electronAPI.onUpdateError?.((err) => {
+      setUpdateMsg(`Update failed: ${err.message}`);
+      setUpdateChecking(false);
+    });
+
     try {
       const result = await window.electronAPI.checkForUpdates();
       if (result.error) {
         setUpdateMsg(result.error);
+        setUpdateChecking(false);
       } else if (result.version) {
         setUpdateMsg(`Update v${result.version} found — downloading...`);
       } else {
         setUpdateMsg('You are on the latest version');
+        setUpdateChecking(false);
       }
     } catch (err) {
       setUpdateMsg(err.message || 'Failed to check for updates');
+      setUpdateChecking(false);
     }
-    setUpdateChecking(false);
   };
 
   const browse = async () => {

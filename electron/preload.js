@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('update-downloaded');
     ipcRenderer.on('update-downloaded', (_e, info) => callback(info));
   },
+  onUpdateError: (callback) => {
+    ipcRenderer.removeAllListeners('update-error');
+    ipcRenderer.on('update-error', (_e, err) => callback(err));
+  },
   quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   onMenuAction: (callback) => {

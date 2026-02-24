@@ -32,6 +32,10 @@ export default function LandingPage() {
         setUpdateReady(true);
         setDownloadProgress(null);
       });
+      window.electronAPI.onUpdateError?.(() => {
+        setDownloadProgress(null);
+        setUpdateInfo(null);
+      });
     }
   }, []);
 
