@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Shield, Search, Download, RefreshCw, ChevronRight, CheckCircle, XCircle } from 'lucide-react';
 
@@ -26,6 +26,9 @@ export default function AdminPage() {
   // Update state
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateMsg, setUpdateMsg] = useState('');
+
+  const [showImportModal, setShowImportModal] = useState(false);
+  const logEndRef = useRef(null);
 
   const checkForUpdates = async () => {
     if (!window.electronAPI?.checkForUpdates) {
@@ -84,12 +87,14 @@ export default function AdminPage() {
   const startImport = async () => {
     if (!selectedSet) return;
     setImportResult(null);
+    setImportStatus(null);
+    setError('');
+    setShowImportModal(true);
     try {
       await axios.post(`${API}/api/admin/tcdb/import`, {
         setId: selectedSet.tcdb_id,
         year: selectedSet.year || year,
       });
-      // Start polling
       const interval = setInterval(async () => {
         try {
           const res = await axios.get(`${API}/api/admin/tcdb/status`);
@@ -98,18 +103,39 @@ export default function AdminPage() {
             clearInterval(interval);
             if (res.data.phase === 'done') {
               setImportResult(res.data.result);
-            } else if (res.data.phase === 'error') {
-              setError(res.data.error || 'Import failed');
             }
           }
         } catch (e) {
           clearInterval(interval);
         }
-      }, 2000);
+      }, 1000);
     } catch (err) {
       setError(err.response?.data?.error || err.message);
+      setShowImportModal(false);
     }
   };
+
+  const cancelImport = async () => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/cancel`);
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  const formatElapsed = (startedAt) => {
+    if (!startedAt) return '0:00';
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  useEffect(() => {
+    if (logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [importStatus?.log]);
 
   const filteredSets = sets.filter(s =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -331,56 +357,96 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Import Progress */}
-      {isImporting && importStatus?.progress && (
-        <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-cv-accent font-semibold uppercase tracking-wider">Import Progress</span>
-            <span className="text-xs text-cv-muted font-mono">
-              {importStatus.progress.current}/{importStatus.progress.total}
-            </span>
-          </div>
-          {importStatus.progress.total > 0 && (
-            <div className="w-full h-1.5 bg-cv-border/50 rounded-full mb-2 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full transition-all duration-500"
-                style={{ width: `${Math.round((importStatus.progress.current / importStatus.progress.total) * 100)}%` }}
-              />
-            </div>
-          )}
-          <div className="text-xs text-cv-text mb-3">{importStatus.progress.currentItem}</div>
-          {/* Live scraper log */}
-          {importStatus.log?.length > 0 && (
-            <div className="bg-cv-dark/80 rounded-lg border border-cv-border/30 p-3 max-h-40 overflow-y-auto font-mono text-[11px] leading-relaxed text-cv-muted">
-              {importStatus.log.map((line, i) => (
-                <div key={i} className={i === importStatus.log.length - 1 ? 'text-cv-text' : ''}>{line}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Import Progress Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-cv-panel border border-cv-border rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl">
+            <h2 className="text-lg font-display font-bold text-cv-text mb-1">
+              {selectedSet?.name || 'Importing...'}
+            </h2>
 
-      {/* Import Result */}
-      {importResult && (
-        <div className="bg-cv-panel rounded-xl p-5 border border-green-500/30 mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <CheckCircle size={20} className="text-green-400" />
-            <h3 className="text-lg font-display font-semibold text-cv-text">Import Complete</h3>
-          </div>
-          {importResult.merge && (
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="text-cv-muted">Sets added:</div>
-              <div className="text-cv-text font-mono">{importResult.merge.sets?.added || 0}</div>
-              <div className="text-cv-muted">Cards added:</div>
-              <div className="text-cv-text font-mono">{importResult.merge.cards?.added || 0}</div>
-              <div className="text-cv-muted">Cards updated:</div>
-              <div className="text-cv-text font-mono">{importResult.merge.cards?.updated || 0}</div>
-              <div className="text-cv-muted">Insert types:</div>
-              <div className="text-cv-text font-mono">{importResult.merge.insertTypes?.added || 0}</div>
-              <div className="text-cv-muted">Parallels:</div>
-              <div className="text-cv-text font-mono">{importResult.merge.parallels?.added || 0}</div>
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-xs font-semibold uppercase tracking-wider text-cv-accent">
+                {importStatus?.phase === 'importing' && 'Scraping...'}
+                {importStatus?.phase === 'merging' && 'Merging into CardVoice...'}
+                {importStatus?.phase === 'done' && 'Import Complete'}
+                {importStatus?.phase === 'error' && 'Import Failed'}
+                {(!importStatus || importStatus.phase === 'idle') && 'Starting...'}
+              </span>
+              <span className="text-xs text-cv-muted font-mono">
+                {formatElapsed(importStatus?.startedAt)}
+              </span>
             </div>
-          )}
+
+            {importStatus?.progress?.total > 0 && (
+              <div className="w-full h-1.5 bg-cv-border/50 rounded-full mb-4 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full transition-all duration-500"
+                  style={{ width: `${Math.round((importStatus.progress.current / importStatus.progress.total) * 100)}%` }}
+                />
+              </div>
+            )}
+
+            {importStatus?.progress?.currentItem && importStatus.phase !== 'done' && importStatus.phase !== 'error' && (
+              <div className="text-xs text-cv-text mb-3 truncate">{importStatus.progress.currentItem}</div>
+            )}
+
+            <div className="bg-cv-dark/80 rounded-lg border border-cv-border/30 p-3 h-48 overflow-y-auto font-mono text-[11px] leading-relaxed text-cv-muted mb-4">
+              {importStatus?.log?.length > 0 ? (
+                importStatus.log.map((line, i) => (
+                  <div key={i} className={i === importStatus.log.length - 1 ? 'text-cv-text' : ''}>{line}</div>
+                ))
+              ) : (
+                <div className="text-cv-muted/50">Waiting for scraper output...</div>
+              )}
+              <div ref={logEndRef} />
+            </div>
+
+            {importStatus?.phase === 'error' && importStatus.error && (
+              <div className="mb-4 p-3 rounded-lg bg-red-900/20 border border-red-500/30 text-red-400 text-sm">
+                {importStatus.error}
+              </div>
+            )}
+
+            {importStatus?.phase === 'done' && importResult?.merge && (
+              <div className="mb-4 p-3 rounded-lg bg-green-900/20 border border-green-500/30">
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle size={16} className="text-green-400" />
+                  <span className="text-sm font-semibold text-green-400">Import Complete</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-xs">
+                  <span className="text-cv-muted">Sets added:</span>
+                  <span className="text-cv-text font-mono">{importResult.merge.sets?.added || 0}</span>
+                  <span className="text-cv-muted">Cards added:</span>
+                  <span className="text-cv-text font-mono">{importResult.merge.cards?.added || 0}</span>
+                  <span className="text-cv-muted">Cards updated:</span>
+                  <span className="text-cv-text font-mono">{importResult.merge.cards?.updated || 0}</span>
+                  <span className="text-cv-muted">Insert types:</span>
+                  <span className="text-cv-text font-mono">{importResult.merge.insertTypes?.added || 0}</span>
+                  <span className="text-cv-muted">Parallels:</span>
+                  <span className="text-cv-text font-mono">{importResult.merge.parallels?.added || 0}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              {importStatus?.running ? (
+                <button
+                  onClick={cancelImport}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-all"
+                >
+                  Cancel Import
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowImportModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
