@@ -222,64 +222,32 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
     logger.info(f"Found {len(sub_sets)} sub-sets")
     sub_set_summaries = []
 
-    # Build insert names list for parallel normalization
+    # --- Pass 1: Classify all sub-sets and register names (no card scraping) ---
+    # Parallels (color/foil variants) and inserts (bonus card sets) are
+    # registered as metadata on the set. Only the BASE cards get scraped.
+    # This keeps the DB lean — a 700-card set stays ~700 cards, not 37,000.
     insert_names = [s["name"] for s in sub_sets if not _is_parallel(s["name"])]
 
-    # Separate parallels from inserts.
-    # Parallels are just color/foil variants of base or insert cards —
-    # we only need to register the parallel NAME, not re-scrape every card.
-    # Only inserts (distinct card lists) need their cards scraped.
     parallel_names_seen: set[str] = set()
     parallels_registered = 0
-    inserts_scraped = 0
 
-    for idx, sub in enumerate(sub_sets, 1):
-        sub_tcdb_id = sub["tcdb_id"]
+    for sub in sub_sets:
         sub_name = sub["name"]
-        sub_slug = sub.get("url_slug", "")
 
-        is_parallel = _is_parallel(sub_name)
-
-        if is_parallel:
-            # Just register the parallel name — no need to scrape cards
+        if _is_parallel(sub_name):
             normalized = _normalize_parallel_name(sub_name, insert_names)
             norm_key = normalized.lower()
             if norm_key not in parallel_names_seen:
                 parallel_names_seen.add(norm_key)
                 upsert_parallel(conn, set_id=set_id, name=normalized)
                 parallels_registered += 1
-            continue
+        else:
+            upsert_insert_type(conn, set_id=set_id, name=sub_name)
 
-        # It's an insert — scrape its unique card list
-        logger.info(f"  [{inserts_scraped + 1}/{len(insert_names)}] Scraping insert: {sub_name}")
-        upsert_insert_type(conn, set_id=set_id, name=sub_name)
+    logger.info(f"  Registered {len(insert_names)} insert types, {parallels_registered} unique parallels")
 
-        try:
-            sub_result = scrape_set_cards(client, sub_tcdb_id, sub_slug)
-            sub_cards = sub_result.get("cards", [])
-
-            sub_count = _process_cards(
-                client, conn, set_id, sub_tcdb_id, sub_cards,
-                insert_type=sub_name, parallel="",
-                set_image_dir=set_image_dir,
-                download_images=download_images,
-            )
-
-            inserts_scraped += 1
-            logger.info(f"    {sub_count} cards added")
-            sub_set_summaries.append({
-                "name": sub_name,
-                "type": "insert",
-                "cards": sub_count,
-            })
-            total_cards += sub_count
-        except Exception as e:
-            logger.error(f"  Failed to scrape insert {sub_name}: {e}")
-            sub_set_summaries.append({"name": sub_name, "cards": 0, "error": str(e)})
-
-    logger.info(f"  Registered {parallels_registered} unique parallels (skipped {len(sub_sets) - len(insert_names) - parallels_registered} duplicate names)")
     update_set_total(conn, set_id)
-    logger.info(f"  Done: {total_cards} total cards ({inserts_scraped} inserts scraped, {parallels_registered} parallels registered)")
+    logger.info(f"  Done: {total_cards} total cards (base only), {len(insert_names)} inserts, {parallels_registered} parallels")
 
     return {
         "name": name,
