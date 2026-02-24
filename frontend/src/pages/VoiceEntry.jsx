@@ -246,6 +246,13 @@ export default function VoiceEntry() {
       .catch(() => setMetadata({ insertTypes: [], parallels: [] }));
   }, [selectedSetId]);
 
+  // Reset parallel when insert type changes
+  useEffect(() => { setParallel(''); }, [insertType]);
+
+  // Derive available parallels from nested metadata
+  const activeInsertObj = metadata.insertTypes.find(t => t.name === insertType);
+  const availableParallels = activeInsertObj?.parallels || [];
+
   const createSet = async () => {
     if (!newSetName.trim()) return;
     try {
@@ -353,11 +360,35 @@ export default function VoiceEntry() {
   const saveToSet = async () => {
     if (!selectedSetId || committed.length === 0 || saving) return;
     setSaving(true);
-    const allCards = [];
-    committed.forEach(batch => { batch.entries.forEach(e => { allCards.push({ card_number: e.num, player: '', team: '', rc_sp: '', insert_type: batch.insertType, parallel: batch.parallel, qty: e.qty }); }); });
     try {
-      await axios.post(`${API}/api/sets/${selectedSetId}/cards`, { cards: allCards });
-      // Persist session stats
+      for (const batch of committed) {
+        // Create base cards (always with parallel='')
+        const baseCards = batch.entries.map(e => ({
+          card_number: e.num, player: '', team: '', rc_sp: '',
+          insert_type: batch.insertType, parallel: '', qty: batch.parallel ? 0 : e.qty,
+        }));
+        const res = await axios.post(`${API}/api/sets/${selectedSetId}/cards`, { cards: baseCards });
+
+        // If a parallel was selected, set parallel qty on each card
+        if (batch.parallel && res.data.created) {
+          const parallelObj = metadata.insertTypes
+            .find(t => t.name === batch.insertType)?.parallels
+            ?.find(p => p.name === batch.parallel);
+          if (parallelObj) {
+            for (let i = 0; i < res.data.created.length; i++) {
+              const card = res.data.created[i];
+              const entry = batch.entries[i];
+              if (card?.id && entry) {
+                await axios.put(`${API}/api/cards/${card.id}/parallels`, {
+                  parallel_id: parallelObj.id, qty: entry.qty,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Session stats
       if (sessionStartRef.current) {
         const duration = Math.floor((Date.now() - sessionStartRef.current) / 1000);
         axios.post(`${API}/api/voice-sessions`, {
@@ -374,10 +405,13 @@ export default function VoiceEntry() {
         sessionStartRef.current = null; setSessionActive(false); setElapsedSeconds(0);
         statsRef.current = { totalEntriesAdded: 0, edits: 0, deletes: 0 };
       }
-      const totalQty = allCards.reduce((s, c) => s + c.qty, 0);
+
+      const allCards = committed.flatMap(b => b.entries);
+      const totalQty = allCards.reduce((s, e) => s + e.qty, 0);
       alert(`Saved ${totalQty} cards (${allCards.length} unique) across ${committed.length} batch${committed.length !== 1 ? 'es' : ''}!`);
       setCommitted([]);
-    } catch (err) { alert('Save failed'); } finally { setSaving(false); }
+    } catch (err) { alert('Save failed: ' + (err.response?.data?.error || err.message)); }
+    finally { setSaving(false); }
   };
 
   const totalCurrentCards = currentEntries.reduce((s, e) => s + e.qty, 0);
@@ -451,12 +485,12 @@ export default function VoiceEntry() {
           </div>
           <div className="col-span-4">
             <label className="text-xs text-cv-muted uppercase tracking-wider font-semibold block mb-1">Parallel</label>
-            {metadata.parallels.length > 0 ? (
+            {availableParallels.length > 0 ? (
               <select value={parallel} onChange={e => setParallel(e.target.value)}
                 className="w-full bg-cv-dark border border-cv-border rounded-lg px-3 py-2 text-sm text-cv-text focus:border-cv-accent focus:outline-none">
                 <option value="">Base</option>
-                {metadata.parallels.map(p => (
-                  <option key={p.name} value={p.name}>
+                {availableParallels.map(p => (
+                  <option key={p.id} value={p.name}>
                     {p.name}{p.print_run ? ` /${p.print_run}` : ''}{p.exclusive ? ` (${p.exclusive})` : ''}
                   </option>
                 ))}
