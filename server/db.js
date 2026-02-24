@@ -265,7 +265,61 @@ function openDb(dbPath) {
     `);
   } catch (_) { /* table already exists */ }
 
+  // Migration: move existing cards with parallel != '' into card_parallels
+  _migrateParallelCards(db);
+
   return db;
+}
+
+
+/**
+ * Migrate legacy card rows that have parallel != '' into the card_parallels table.
+ * For each such row: find/create the base card, create a card_parallels entry,
+ * then delete the old parallel card row. Idempotent — skips if no legacy rows exist.
+ */
+function _migrateParallelCards(db) {
+  const cardsWithParallel = db.prepare(`
+    SELECT c.id, c.set_id, c.card_number, c.insert_type, c.parallel, c.qty,
+           c.player, c.team, c.rc_sp, c.image_path
+    FROM cards c WHERE c.parallel != '' AND c.parallel IS NOT NULL
+  `).all();
+
+  if (cardsWithParallel.length === 0) return;
+  console.log(`[Migration] Migrating ${cardsWithParallel.length} parallel card rows to card_parallels...`);
+
+  const findBaseCard = db.prepare('SELECT id FROM cards WHERE set_id = ? AND card_number = ? AND insert_type = ? AND parallel = ?');
+  const createBaseCard = db.prepare(`
+    INSERT INTO cards (set_id, card_number, player, team, rc_sp, insert_type, parallel, qty, image_path)
+    VALUES (?, ?, ?, ?, ?, ?, '', 0, ?)
+  `);
+  const findParallel = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ?');
+  const insertCardParallel = db.prepare('INSERT OR IGNORE INTO card_parallels (card_id, parallel_id, qty) VALUES (?, ?, ?)');
+  const deleteCard = db.prepare('DELETE FROM cards WHERE id = ?');
+
+  const migrate = db.transaction(() => {
+    for (const c of cardsWithParallel) {
+      // Find or create the base card
+      let baseCard = findBaseCard.get(c.set_id, c.card_number, c.insert_type, '');
+      if (!baseCard) {
+        const info = createBaseCard.run(c.set_id, c.card_number, c.player, c.team, c.rc_sp, c.insert_type, c.image_path);
+        baseCard = { id: Number(info.lastInsertRowid) };
+      }
+
+      // Find the parallel in set_parallels
+      const par = findParallel.get(c.set_id, c.parallel);
+      if (par && c.qty > 0) {
+        insertCardParallel.run(baseCard.id, par.id, c.qty);
+      }
+
+      // Delete the old parallel card row (unless it IS the base)
+      if (c.id !== baseCard.id) {
+        deleteCard.run(c.id);
+      }
+    }
+  });
+
+  migrate();
+  console.log('[Migration] Parallel card migration complete');
 }
 
 
