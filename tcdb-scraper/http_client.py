@@ -60,6 +60,11 @@ class TcdbClient:
             json.dump(cookies, f, indent=2)
         logger.debug(f"Saved {len(cookies)} cookies")
 
+    def set_speed(self, min_delay: float, max_delay: float):
+        """Change rate limit delays (e.g. faster for sub-set scraping)."""
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+
     def _wait_for_rate_limit(self):
         """Wait random delay between requests to appear human."""
         now = time.time()

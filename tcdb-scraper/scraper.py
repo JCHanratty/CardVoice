@@ -222,15 +222,26 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
     logger.info(f"Found {len(sub_sets)} sub-sets")
     sub_set_summaries = []
 
-    # --- Pass 1: Classify all sub-sets and register names (no card scraping) ---
-    # Parallels (color/foil variants) and inserts (bonus card sets) are
-    # registered as metadata on the set. Only the BASE cards get scraped.
-    # This keeps the DB lean — a 700-card set stays ~700 cards, not 37,000.
+    # Classify sub-sets into parallels vs inserts
     insert_names = [s["name"] for s in sub_sets if not _is_parallel(s["name"])]
+
+    # Identify ROOT inserts vs insert variants.
+    # Variants share the same players as a root insert but with added treatment
+    # (autographs, relics, chrome, etc.). We register them as insert types
+    # but only scrape the root insert's card list.
+    root_inserts = _find_root_inserts(insert_names)
+    root_set = {n.lower() for n in root_inserts}
+    # Count unique canonical insert names (merging Series One/Two)
+    canonical_count = len({_strip_series_suffix(n).lower() for n in insert_names})
+    variant_count = canonical_count - len(root_inserts)
+    logger.info(f"  {len(root_inserts)} root inserts to scrape, {variant_count} variants (metadata only), {canonical_count} canonical inserts from {len(insert_names)} raw")
 
     parallel_names_seen: set[str] = set()
     parallels_registered = 0
+    inserts_scraped = 0
+    insert_names_registered: set[str] = set()
 
+    # --- Pass 1: Register all parallels and insert type names ---
     for sub in sub_sets:
         sub_name = sub["name"]
 
@@ -242,12 +253,76 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
                 upsert_parallel(conn, set_id=set_id, name=normalized)
                 parallels_registered += 1
         else:
-            upsert_insert_type(conn, set_id=set_id, name=sub_name)
+            # Register the canonical (series-stripped) insert name
+            canonical = _strip_series_suffix(sub_name)
+            canon_key = canonical.lower()
+            if canon_key not in insert_names_registered:
+                insert_names_registered.add(canon_key)
+                upsert_insert_type(conn, set_id=set_id, name=canonical)
 
-    logger.info(f"  Registered {len(insert_names)} insert types, {parallels_registered} unique parallels")
+    logger.info(f"  Registered {parallels_registered} unique parallels, {len(insert_names_registered)} insert types")
 
+    # --- Pass 2: Scrape card lists for root inserts ---
+    # Use faster rate limiting for sub-set pages since we've already
+    # established ourselves as a legitimate visitor on the base set.
+    original_min = client.min_delay
+    original_max = client.max_delay
+    client.set_speed(1.0, 2.5)
+
+    # Track which roots we've already scraped (avoid Series One + Two double-scrape)
+    scraped_roots: set[str] = set()
+
+    for sub in sub_sets:
+        sub_name = sub["name"]
+        sub_slug = sub.get("url_slug", "")
+
+        # Skip parallels (already registered above)
+        if _is_parallel(sub_name):
+            continue
+
+        # Map to canonical name and check if it's a root insert
+        canonical = _strip_series_suffix(sub_name)
+        canon_key = canonical.lower()
+        if canon_key not in root_set:
+            continue
+
+        # Skip if we already scraped this root (e.g., Series One already done)
+        if canon_key in scraped_roots:
+            continue
+        scraped_roots.add(canon_key)
+
+        sub_tcdb_id = sub["tcdb_id"]
+        inserts_scraped += 1
+        logger.info(f"  [{inserts_scraped}/{len(root_inserts)}] Scraping insert: {canonical}")
+
+        try:
+            sub_result = scrape_set_cards(client, sub_tcdb_id, sub_slug)
+            sub_cards = sub_result.get("cards", [])
+
+            sub_count = _process_cards(
+                client, conn, set_id, sub_tcdb_id, sub_cards,
+                insert_type=canonical, parallel="",
+                set_image_dir=set_image_dir,
+                download_images=download_images,
+            )
+
+            logger.info(f"    {sub_count} cards added")
+            sub_set_summaries.append({
+                "name": canonical,
+                "type": "insert",
+                "cards": sub_count,
+            })
+            total_cards += sub_count
+        except Exception as e:
+            logger.error(f"  Failed to scrape insert {canonical}: {e}")
+            sub_set_summaries.append({"name": canonical, "cards": 0, "error": str(e)})
+
+    # Restore original rate limits
+    client.set_speed(original_min, original_max)
+
+    logger.info(f"  {parallels_registered} parallels, {len(insert_names_registered)} insert types ({inserts_scraped} scraped, {variant_count} variants)")
     update_set_total(conn, set_id)
-    logger.info(f"  Done: {total_cards} total cards (base only), {len(insert_names)} inserts, {parallels_registered} parallels")
+    logger.info(f"  Done: {total_cards} total cards")
 
     return {
         "name": name,
@@ -331,6 +406,81 @@ def _is_parallel(name: str) -> bool:
     return any(kw in lower for kw in _PARALLEL_KEYWORDS)
 
 
+_SERIES_RE = re.compile(r'\s*\(Series\s+\w+\)\s*', re.IGNORECASE)
+
+
+def _strip_series_suffix(name: str) -> str:
+    """Strip '(Series One)', '(Series Two)' etc. from insert names.
+
+    Handles both suffix position (most common) and mid-name position
+    like 'Oversized (Series One) 4x6'.
+    """
+    return _SERIES_RE.sub(' ', name).strip()
+
+
+# Keywords that mark an insert as a variant of another insert.
+# "Heavy Lumber Autograph Relics" is a variant of "Heavy Lumber" —
+# same players, just with autograph/relic treatment. We don't need
+# to scrape these separately.
+_VARIANT_KEYWORDS = [
+    "autograph", "auto ", "autos",
+    "relic", "patch", "swatch", "memorabilia", "material",
+    "dual ", "triple ",
+    "chrome", "no name", "the real one",
+    "oversized", "4x6", "6x8",
+    "bronze", "tin variation",
+]
+
+
+def _find_root_inserts(insert_names: list[str]) -> list[str]:
+    """Identify root inserts from a list of insert names.
+
+    A root insert is one that isn't a derivative of another insert.
+    "Heavy Lumber" is a root; "Heavy Lumber Autograph Relics" is a variant.
+
+    Steps:
+    1. Merge (Series One)/(Series Two) duplicates into one canonical name.
+    2. For each name, check if it starts with any shorter name's text
+       AND the extra suffix contains a variant keyword → mark as variant.
+    3. Group remaining names that share a common prefix ending with a
+       variant keyword — pick the shortest as the representative root.
+    4. Everything else is a root insert.
+
+    Returns canonical names (with series suffix stripped).
+    """
+    # Merge (Series One)/(Series Two) into one canonical name
+    canonical_map: dict[str, str] = {}  # stripped_lower -> first original name
+    canonical_names: list[str] = []
+    for name in insert_names:
+        stripped = _strip_series_suffix(name)
+        key = stripped.lower()
+        if key not in canonical_map:
+            canonical_map[key] = stripped
+            canonical_names.append(stripped)
+
+    # Sort shortest first so we check roots before their variants
+    sorted_names = sorted(canonical_names, key=len)
+    roots: list[str] = []
+    variant_set: set[str] = set()
+
+    # Pass 1: Mark explicit variants (name starts with a shorter root name + variant keyword)
+    for name in sorted_names:
+        is_variant = False
+        name_lower = name.lower()
+        for root in roots:
+            root_lower = root.lower()
+            if name_lower.startswith(root_lower) and len(name) > len(root):
+                suffix = name_lower[len(root_lower):].strip()
+                if any(kw in suffix for kw in _VARIANT_KEYWORDS):
+                    is_variant = True
+                    variant_set.add(name_lower)
+                    break
+        if not is_variant:
+            roots.append(name)
+
+    return roots
+
+
 def _normalize_parallel_name(parallel_name: str, insert_names: list[str]) -> str:
     """Strip insert/subset prefix from a parallel name to get the color/variant.
 
@@ -340,12 +490,16 @@ def _normalize_parallel_name(parallel_name: str, insert_names: list[str]) -> str
     """
     result = parallel_name.strip()
 
-    # Strip "(Series One)", "(Series Two)" etc.
-    result = re.sub(r'\s*\(Series\s+\w+\)\s*$', '', result).strip()
+    # Strip "(Series One)", "(Series Two)" etc. from anywhere in the name
+    result = _SERIES_RE.sub(' ', result).strip()
 
     # Try to strip known insert names (longest first to avoid partial matches)
-    sorted_inserts = sorted(insert_names, key=len, reverse=True)
-    for insert_name in sorted_inserts:
+    # Also strip series suffixes from insert names for matching
+    canonical_inserts = sorted(
+        {_strip_series_suffix(n) for n in insert_names},
+        key=len, reverse=True,
+    )
+    for insert_name in canonical_inserts:
         if result.lower().startswith(insert_name.lower()):
             stripped = result[len(insert_name):].strip()
             if stripped:
@@ -546,7 +700,9 @@ def main():
             if not set_name:
                 set_name = f"Set-{set_id}"
             slug = set_name.replace(" ", "-")
-            info = {"tcdb_id": set_id, "name": set_name, "url_slug": slug, "year": args.year}
+            ym = re.match(r"(\d{4})\s+", set_name)
+            yr = int(ym.group(1)) if ym else args.year
+            info = {"tcdb_id": set_id, "name": set_name, "url_slug": slug, "year": yr}
         else:
             # Auto: discover one year and pick first set
             url = f"{TCDB_BASE}/ViewAll.cfm/sp/Baseball/year/{args.year}"
@@ -585,7 +741,9 @@ def main():
                 set_name = f"Set-{sid}"
             # Build URL slug from name
             slug = set_name.replace(" ", "-")
-            info = {"tcdb_id": sid, "name": set_name, "url_slug": slug, "year": args.year}
+            ym = re.match(r"(\d{4})\s+", set_name)
+            yr = int(ym.group(1)) if ym else args.year
+            info = {"tcdb_id": sid, "name": set_name, "url_slug": slug, "year": yr}
         else:
             # Auto: discover one year and pick first set
             url = f"{TCDB_BASE}/ViewAll.cfm/sp/Baseball/year/{args.start_year}"
@@ -622,11 +780,15 @@ def main():
             set_name = f"Set-{sid}"
         slug = set_name.replace(" ", "-")
 
+        # Extract year from set name (e.g., "2025 Topps Series 1" → 2025)
+        year_match = re.match(r"(\d{4})\s+", set_name)
+        set_year = int(year_match.group(1)) if year_match else args.year
+
         set_info = {
             "tcdb_id": sid,
             "name": set_name,
             "url_slug": slug,
-            "year": args.year,
+            "year": set_year,
         }
 
         summary = scrape_set(client, conn, set_info, download_images=not args.no_images)
