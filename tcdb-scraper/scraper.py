@@ -225,76 +225,61 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
     # Build insert names list for parallel normalization
     insert_names = [s["name"] for s in sub_sets if not _is_parallel(s["name"])]
 
-    # Track (insert_type, parallel) combos already scraped to skip duplicates.
-    # Multiple TCDB sub-sets can normalize to the same parallel name
-    # (e.g. "Stars of MLB Red Foil" and "Chrome Prospects Red Foil" both → "Red Foil"),
-    # making repeated HTTP fetches pointless since all DB inserts would be dupes.
-    scraped_keys: set[tuple[str, str]] = set()
-    skipped = 0
+    # Separate parallels from inserts.
+    # Parallels are just color/foil variants of base or insert cards —
+    # we only need to register the parallel NAME, not re-scrape every card.
+    # Only inserts (distinct card lists) need their cards scraped.
+    parallel_names_seen: set[str] = set()
+    parallels_registered = 0
+    inserts_scraped = 0
 
     for idx, sub in enumerate(sub_sets, 1):
         sub_tcdb_id = sub["tcdb_id"]
         sub_name = sub["name"]
         sub_slug = sub.get("url_slug", "")
 
-        # Classify as insert or parallel based on naming
         is_parallel = _is_parallel(sub_name)
-        kind = "parallel" if is_parallel else "insert"
 
         if is_parallel:
-            # Normalize: "Stars of MLB Red Foil" → "Red Foil"
+            # Just register the parallel name — no need to scrape cards
             normalized = _normalize_parallel_name(sub_name, insert_names)
-            insert_type = "Base"
-            parallel = normalized
-        else:
-            insert_type = sub_name
-            parallel = ""
-
-        # Skip if we already scraped this exact (insert_type, parallel) combo
-        key = (insert_type, parallel.lower())
-        if key in scraped_keys:
-            skipped += 1
-            logger.info(f"  [{idx}/{len(sub_sets)}] Skipping duplicate {kind}: {sub_name} (already have \"{parallel or insert_type}\")")
-            # Still register the parallel/insert type name
-            if is_parallel:
+            norm_key = normalized.lower()
+            if norm_key not in parallel_names_seen:
+                parallel_names_seen.add(norm_key)
                 upsert_parallel(conn, set_id=set_id, name=normalized)
-            else:
-                upsert_insert_type(conn, set_id=set_id, name=sub_name)
+                parallels_registered += 1
             continue
 
-        logger.info(f"  [{idx}/{len(sub_sets)}] Scraping {kind}: {sub_name}")
+        # It's an insert — scrape its unique card list
+        logger.info(f"  [{inserts_scraped + 1}/{len(insert_names)}] Scraping insert: {sub_name}")
+        upsert_insert_type(conn, set_id=set_id, name=sub_name)
 
-        if is_parallel:
-            upsert_parallel(conn, set_id=set_id, name=normalized)
-        else:
-            upsert_insert_type(conn, set_id=set_id, name=sub_name)
-
-        # Scrape the sub-set's cards
         try:
             sub_result = scrape_set_cards(client, sub_tcdb_id, sub_slug)
             sub_cards = sub_result.get("cards", [])
 
             sub_count = _process_cards(
                 client, conn, set_id, sub_tcdb_id, sub_cards,
-                insert_type=insert_type, parallel=parallel,
+                insert_type=sub_name, parallel="",
                 set_image_dir=set_image_dir,
                 download_images=download_images,
             )
 
-            scraped_keys.add(key)
+            inserts_scraped += 1
             logger.info(f"    {sub_count} cards added")
             sub_set_summaries.append({
                 "name": sub_name,
-                "type": kind,
+                "type": "insert",
                 "cards": sub_count,
             })
             total_cards += sub_count
         except Exception as e:
-            logger.error(f"  Failed to scrape sub-set {sub_name}: {e}")
+            logger.error(f"  Failed to scrape insert {sub_name}: {e}")
             sub_set_summaries.append({"name": sub_name, "cards": 0, "error": str(e)})
 
+    logger.info(f"  Registered {parallels_registered} unique parallels (skipped {len(sub_sets) - len(insert_names) - parallels_registered} duplicate names)")
     update_set_total(conn, set_id)
-    logger.info(f"  Done: {total_cards} total cards ({len(sub_set_summaries)} sub-sets scraped, {skipped} duplicates skipped)")
+    logger.info(f"  Done: {total_cards} total cards ({inserts_scraped} inserts scraped, {parallels_registered} parallels registered)")
 
     return {
         "name": name,
