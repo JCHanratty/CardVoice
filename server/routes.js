@@ -261,6 +261,21 @@ function createRoutes(db) {
     res.json({ id: cardId, ...updated });
   });
 
+  // PUT /api/cards/:cardId/parallels — set or remove parallel qty for a card
+  router.put('/api/cards/:cardId/parallels', (req, res) => {
+    const { cardId } = req.params;
+    const { parallel_id, qty } = req.body;
+    if (!parallel_id) return res.status(400).json({ error: 'parallel_id required' });
+    const card = db.prepare('SELECT id FROM cards WHERE id = ?').get(cardId);
+    if (!card) return res.status(404).json({ error: 'Card not found' });
+    if (qty <= 0) {
+      db.prepare('DELETE FROM card_parallels WHERE card_id = ? AND parallel_id = ?').run(cardId, parallel_id);
+    } else {
+      db.prepare(`INSERT INTO card_parallels (card_id, parallel_id, qty) VALUES (?, ?, ?) ON CONFLICT(card_id, parallel_id) DO UPDATE SET qty = excluded.qty`).run(cardId, parallel_id, qty);
+    }
+    res.json({ ok: true });
+  });
+
   // PUT /api/sets/:id/bulk-qty — bulk set qty for filtered cards
   router.put('/api/sets/:id/bulk-qty', (req, res) => {
     const setId = Number(req.params.id);

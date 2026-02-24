@@ -667,3 +667,35 @@ describe('Nested Metadata', () => {
     assert.ok(chrome.parallels.find(p => p.name === 'Black Refractor'));
   });
 });
+
+
+// ============================================================
+// Card Parallels API
+// ============================================================
+describe('Card Parallels API', () => {
+  it('can set parallel qty for a card', async () => {
+    const set = (await api('POST', '/api/sets', { name: 'ParAPI', year: 2025, sport: 'Baseball', brand: 'Topps' })).data;
+    const itId = db.prepare('INSERT INTO set_insert_types (set_id, name) VALUES (?, ?)').run(set.id, 'Base').lastInsertRowid;
+    const pId = db.prepare('INSERT INTO set_parallels (set_id, name) VALUES (?, ?)').run(set.id, 'Gold').lastInsertRowid;
+    db.prepare('INSERT INTO insert_type_parallels (insert_type_id, parallel_id) VALUES (?, ?)').run(itId, pId);
+    await api('POST', `/api/sets/${set.id}/cards`, { cards: [{ card_number: '1', player: 'Ohtani', insert_type: 'Base' }] });
+    const cardId = db.prepare('SELECT id FROM cards WHERE set_id = ? AND card_number = ?').get(set.id, '1').id;
+
+    const { status, data } = await api('PUT', `/api/cards/${cardId}/parallels`, { parallel_id: pId, qty: 2 });
+    assert.strictEqual(status, 200);
+
+    const row = db.prepare('SELECT qty FROM card_parallels WHERE card_id = ? AND parallel_id = ?').get(cardId, pId);
+    assert.strictEqual(row.qty, 2);
+  });
+
+  it('removes parallel when qty set to 0', async () => {
+    const set = (await api('POST', '/api/sets', { name: 'ParAPI2', year: 2025, sport: 'Baseball', brand: 'Topps' })).data;
+    const pId = db.prepare('INSERT INTO set_parallels (set_id, name) VALUES (?, ?)').run(set.id, 'Blue').lastInsertRowid;
+    const cardId = db.prepare('INSERT INTO cards (set_id, card_number, player) VALUES (?, ?, ?)').run(set.id, '1', 'Judge').lastInsertRowid;
+    db.prepare('INSERT INTO card_parallels (card_id, parallel_id, qty) VALUES (?, ?, ?)').run(cardId, pId, 1);
+
+    await api('PUT', `/api/cards/${cardId}/parallels`, { parallel_id: pId, qty: 0 });
+    const row = db.prepare('SELECT * FROM card_parallels WHERE card_id = ? AND parallel_id = ?').get(cardId, pId);
+    assert.strictEqual(row, undefined);
+  });
+});
