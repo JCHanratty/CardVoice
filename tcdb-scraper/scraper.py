@@ -768,6 +768,10 @@ def main():
 
     # --- Single set import mode ---
     if args.set_id and args.preview is None and not args.list:
+        # Remove stale catalog so cards are freshly inserted
+        if DB_PATH.exists():
+            DB_PATH.unlink()
+            logger.info("Cleared previous catalog DB")
         conn = create_catalog_db(str(DB_PATH))
         sid = args.set_id
 
