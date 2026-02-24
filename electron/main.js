@@ -269,7 +269,15 @@ function createWindow() {
 ipcMain.handle('get-app-version', () => app.getVersion());
 
 ipcMain.handle('quit-and-install', () => {
-  autoUpdater.quitAndInstall(true, true);
+  // Close server/DB first so app.quit() doesn't hang
+  if (serverHandle) {
+    try { serverHandle.server.close(); } catch (e) {}
+    try { serverHandle.db.close(); } catch (e) {}
+    serverHandle = null;
+  }
+  // Use isSilent=false so NSIS can handle the close properly,
+  // isForceRunAfter=true to relaunch after install
+  autoUpdater.quitAndInstall(false, true);
 });
 
 ipcMain.handle('check-for-updates', async () => {
@@ -304,15 +312,17 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (serverHandle) {
-    serverHandle.server.close();
-    serverHandle.db.close();
+    try { serverHandle.server.close(); } catch (e) {}
+    try { serverHandle.db.close(); } catch (e) {}
+    serverHandle = null;
   }
   app.quit();
 });
 
 app.on('before-quit', () => {
   if (serverHandle) {
-    serverHandle.server.close();
-    serverHandle.db.close();
+    try { serverHandle.server.close(); } catch (e) {}
+    try { serverHandle.db.close(); } catch (e) {}
+    serverHandle = null;
   }
 });
