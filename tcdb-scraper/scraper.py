@@ -45,10 +45,7 @@ END_YEAR = 1900  # Go all the way back
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stderr),
-        logging.FileHandler("scraper.log", encoding="utf-8"),
-    ],
+    handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
 
@@ -191,30 +188,38 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
         set_image_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Scrape base cards from Checklist page ---
+    logger.info("Fetching base card checklist...")
     result = scrape_set_cards(client, tcdb_id, url_slug)
+    base_cards = result.get("cards", [])
+    logger.info(f"Found {len(base_cards)} base cards, inserting into DB...")
     total_cards = _process_cards(
-        client, conn, set_id, tcdb_id, result.get("cards", []),
+        client, conn, set_id, tcdb_id, base_cards,
         insert_type="Base", set_image_dir=set_image_dir,
         download_images=download_images,
     )
+    logger.info(f"Inserted {total_cards} base cards")
 
     if result.get("total_cards"):
         update_set_total(conn, set_id)
 
     # --- Discover sub-sets (inserts & parallels) via AJAX ---
+    logger.info("Discovering sub-sets (inserts & parallels)...")
     sub_sets = discover_sub_sets(client, tcdb_id, parent_name=name)
+    logger.info(f"Found {len(sub_sets)} sub-sets")
     sub_set_summaries = []
 
     # Build insert names list for parallel normalization
     insert_names = [s["name"] for s in sub_sets if not _is_parallel(s["name"])]
 
-    for sub in sub_sets:
+    for idx, sub in enumerate(sub_sets, 1):
         sub_tcdb_id = sub["tcdb_id"]
         sub_name = sub["name"]
         sub_slug = sub.get("url_slug", "")
 
         # Classify as insert or parallel based on naming
         is_parallel = _is_parallel(sub_name)
+        kind = "parallel" if is_parallel else "insert"
+        logger.info(f"  [{idx}/{len(sub_sets)}] Scraping {kind}: {sub_name}")
 
         if is_parallel:
             # Normalize: "Stars of MLB Red Foil" → "Red Foil"
@@ -238,9 +243,10 @@ def scrape_set(client: TcdbClient, conn, set_info: dict,
                 download_images=download_images,
             )
 
+            logger.info(f"    {sub_count} cards added")
             sub_set_summaries.append({
                 "name": sub_name,
-                "type": "parallel" if is_parallel else "insert",
+                "type": kind,
                 "cards": sub_count,
             })
             total_cards += sub_count
@@ -266,7 +272,8 @@ def _process_cards(client, conn, set_id, tcdb_id, cards,
                    set_image_dir=None, download_images=True) -> int:
     """Insert cards into DB and optionally download images. Returns count added."""
     count = 0
-    for card in cards:
+    total = len(cards)
+    for i, card in enumerate(cards):
         image_path = ""
         image_url = card.get("image_url", "")
 
@@ -296,6 +303,9 @@ def _process_cards(client, conn, set_id, tcdb_id, cards,
         )
         if card_id:
             count += 1
+        # Log progress every 50 cards for large sets
+        if total >= 50 and (i + 1) % 50 == 0:
+            logger.info(f"    Processing cards: {i + 1}/{total}")
     return count
 
 
