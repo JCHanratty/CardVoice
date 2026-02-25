@@ -26,61 +26,64 @@ TCDB_BASE = "https://www.tcdb.com"
 
 
 def parse_collection_rows(driver):
-    """Extract cards from current page using Selenium DOM."""
-    from selenium.webdriver.common.by import By
+    """Extract cards from current page using page_source + regex (much faster than Selenium DOM)."""
+    from bs4 import BeautifulSoup
 
+    html = driver.page_source
+    soup = BeautifulSoup(html, "html.parser")
     cards = []
-    rows = driver.find_elements(By.CSS_SELECTOR, "tr")
-    for row in rows:
-        tds = row.find_elements(By.TAG_NAME, "td")
-        if len(tds) < 5:
-            continue
 
-        # Look for card link (ViewCard.cfm)
-        try:
-            links = tds[2].find_elements(By.CSS_SELECTOR, "a[href*='ViewCard.cfm']")
-            if not links:
-                continue
-            link = links[0]
-        except Exception:
-            continue
-
-        href = link.get_attribute("href") or ""
+    # Find all links to ViewCard.cfm
+    for link in soup.find_all("a", href=re.compile(r"ViewCard\.cfm/sid/\d+/cid/\d+")):
+        href = link.get("href", "")
         m = re.search(r"/ViewCard\.cfm/sid/(\d+)/cid/(\d+)", href)
         if not m:
             continue
 
         tcdb_set_id = int(m.group(1))
         tcdb_card_id = int(m.group(2))
-        card_number = link.text.strip()
+        card_number = link.get_text(strip=True)
 
-        # Qty from badge
-        try:
-            badge = tds[0].find_elements(By.CSS_SELECTOR, "span.badge")
-            qty = int(badge[0].text.strip()) if badge else 1
-        except Exception:
-            qty = 1
+        # Walk up to the row (tr) to find qty and player
+        row = link.find_parent("tr")
+        if not row:
+            continue
 
-        # Player name
-        try:
-            player_links = tds[4].find_elements(By.TAG_NAME, "a")
-            player = player_links[0].text.strip() if player_links else tds[4].text.strip()
-        except Exception:
-            player = ""
+        tds = row.find_all("td")
 
-        # RC/SP suffix
+        # Qty from badge in first td
+        qty = 1
+        if tds:
+            badge = tds[0].find("span", class_="badge")
+            if badge:
+                try:
+                    qty = int(badge.get_text(strip=True))
+                except ValueError:
+                    qty = 1
+
+        # Player name — typically in td[4] or last meaningful td
+        player = ""
         rc_sp = ""
-        try:
-            full_text = tds[4].text.strip()
-            if player and len(full_text) > len(player):
-                rc_sp = full_text[len(player):].strip()
-        except Exception:
-            pass
+        # Find the td that contains a link to ViewPerson or Person
+        for td in tds[3:]:
+            person_link = td.find("a", href=re.compile(r"(ViewPerson|Person|Members)"))
+            if person_link:
+                player = person_link.get_text(strip=True)
+                full_text = td.get_text(strip=True)
+                if player and len(full_text) > len(player):
+                    rc_sp = full_text[len(player):].strip()
+                break
 
-        cards.append({
-            "card_number": card_number, "player": player, "qty": qty,
-            "rc_sp": rc_sp, "tcdb_set_id": tcdb_set_id, "tcdb_card_id": tcdb_card_id,
-        })
+        # Fallback: if no person link found, try td[4] text
+        if not player and len(tds) > 4:
+            player = tds[4].get_text(strip=True)
+
+        if card_number or player:
+            cards.append({
+                "card_number": card_number, "player": player, "qty": qty,
+                "rc_sp": rc_sp, "tcdb_set_id": tcdb_set_id, "tcdb_card_id": tcdb_card_id,
+            })
+
     return cards
 
 
@@ -147,25 +150,49 @@ def main():
         driver.get(collection_url)
         time.sleep(3)
 
-        # Check if we got redirected to login or profile
-        if "Login" in driver.current_url or "Profile" in driver.current_url:
-            logger.info("Please log in to TCDB in the browser window...")
-            driver.get(f"{TCDB_BASE}/Login.cfm")
-            # Wait for user to log in (up to 5 minutes)
-            for i in range(300):
-                time.sleep(1)
-                current = driver.current_url
-                if "Login" not in current and "Error" not in current:
-                    break
-            # Try collection page again
-            driver.get(collection_url)
-            time.sleep(3)
-
-        # Check if we're on the collection page
+        # Check if we got redirected to login or profile (not the collection page)
         page_source = driver.page_source
         if "ViewCard.cfm" not in page_source:
-            logger.error("Could not access collection page. Make sure you're logged in.")
+            logger.info("Not logged in. Please log into TCDB in the Chrome window...")
+            logger.info("(You have up to 10 minutes to log in)")
+            driver.get(f"{TCDB_BASE}/Login.cfm")
+            # Wait for user to log in (up to 10 minutes)
+            logged_in = False
+            for i in range(600):
+                time.sleep(1)
+                current = driver.current_url
+                # User logged in when they leave the login page
+                if "Login.cfm" not in current:
+                    logger.info(f"Login detected! Navigated to: {current}")
+                    logged_in = True
+                    break
+                if i > 0 and i % 30 == 0:
+                    logger.info(f"Still waiting for login... ({i}s elapsed)")
+
+            if not logged_in:
+                logger.error("Login timed out after 10 minutes.")
+                driver.quit()
+                sys.exit(1)
+
+            # Give TCDB a moment to settle, then navigate to collection
+            time.sleep(3)
+            logger.info("Navigating to collection page...")
+            driver.get(collection_url)
+            time.sleep(5)
+
+            # Verify we can see the collection
+            page_source = driver.page_source
+            if "ViewCard.cfm" not in page_source:
+                # Maybe redirected to profile — try the collection URL once more
+                logger.info("Retrying collection page...")
+                driver.get(collection_url)
+                time.sleep(5)
+                page_source = driver.page_source
+
+        if "ViewCard.cfm" not in page_source:
+            logger.error("Could not access collection page after login.")
             logger.info("Current URL: " + driver.current_url)
+            logger.info("Page title: " + driver.title)
             driver.quit()
             sys.exit(1)
 
