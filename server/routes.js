@@ -101,6 +101,18 @@ function createRoutes(db) {
       card.owned_parallels = parallelsByCard[card.id] || [];
     }
 
+    // Enrich cards with player metadata
+    const { matchPlayers, normalizePlayerName } = require('./player-match');
+    const playerNames = cards.map(c => c.player).filter(Boolean);
+    const playerMap = matchPlayers(db, playerNames);
+    for (const card of cards) {
+      const normalized = normalizePlayerName(card.player);
+      const meta = playerMap.get(normalized);
+      card.player_tier = meta?.tier || null;
+      card.is_focus_player = meta?.is_focus ? true : false;
+      card.hof_year = meta?.hof_induction_year || null;
+    }
+
     res.json({
       id: cardSet.id,
       name: cardSet.name,

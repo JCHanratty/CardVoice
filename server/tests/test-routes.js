@@ -905,3 +905,23 @@ describe('Player Metadata API', () => {
     assert.ok(data.some(p => p.player_name.includes('ryan')));
   });
 });
+
+
+// ============================================================
+// Player Enrichment
+// ============================================================
+describe('Player Enrichment', () => {
+  it('GET /api/sets/:id includes player_tier and is_focus on cards', async () => {
+    const set = (await api('POST', '/api/sets', { name: 'PlayerEnrich', year: 2025, sport: 'Baseball', brand: 'Topps' })).data;
+    // Hank Aaron should exist from HOF seeding
+    await api('POST', `/api/sets/${set.id}/cards`, { cards: [
+      { card_number: '1', player: 'Hank Aaron', insert_type: 'Base', qty: 1 },
+      { card_number: '2', player: 'Random Nobody', insert_type: 'Base', qty: 1 },
+    ]});
+    const { data } = await api('GET', `/api/sets/${set.id}`);
+    const aaron = data.cards.find(c => c.card_number === '1');
+    const nobody = data.cards.find(c => c.card_number === '2');
+    assert.strictEqual(aaron.player_tier, 'hof');
+    assert.strictEqual(nobody.player_tier, null);
+  });
+});
