@@ -281,6 +281,12 @@ function openDb(dbPath) {
     `);
   } catch (_) {}
 
+  // Seed HOF players if table is empty
+  const hofCount = db.prepare('SELECT COUNT(*) as cnt FROM player_metadata WHERE tier = ?').get('hof');
+  if (hofCount.cnt === 0) {
+    _seedHofPlayers(db);
+  }
+
   // Migration: card_sets columns for TCDB collection import
   const tcdbSetCols = [
     'ALTER TABLE card_sets ADD COLUMN checklist_imported INTEGER DEFAULT 0',
@@ -345,6 +351,24 @@ function _migrateParallelCards(db) {
 
   migrate();
   console.log('[Migration] Parallel card migration complete');
+}
+
+
+function _seedHofPlayers(db) {
+  const hofPath = require('path').join(__dirname, 'data', 'hof-players.json');
+  if (!require('fs').existsSync(hofPath)) return;
+  const players = JSON.parse(require('fs').readFileSync(hofPath, 'utf8'));
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO player_metadata (player_name, tier, hof_induction_year, hof_position, hof_primary_team)
+    VALUES (?, 'hof', ?, ?, ?)
+  `);
+  const seed = db.transaction(() => {
+    for (const p of players) {
+      insert.run(p.name.toLowerCase().trim(), p.year, p.position, p.team);
+    }
+  });
+  seed();
+  console.log(`[Seed] Loaded ${players.length} HOF players`);
 }
 
 

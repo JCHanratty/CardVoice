@@ -764,11 +764,12 @@ describe('Parallel Card Migration', () => {
 
 describe('Player Metadata', () => {
   it('can insert and query player_metadata', () => {
+    // Use a name that won't be in the HOF seed data
     const result = db.prepare(
       "INSERT INTO player_metadata (player_name, tier, is_focus, hof_induction_year, hof_position) VALUES (?, ?, ?, ?, ?)"
-    ).run('nolan ryan', 'hof', 1, 1999, 'P');
+    ).run('test player xyz', 'hof', 1, 1999, 'P');
     const row = db.prepare("SELECT * FROM player_metadata WHERE id = ?").get(result.lastInsertRowid);
-    assert.strictEqual(row.player_name, 'nolan ryan');
+    assert.strictEqual(row.player_name, 'test player xyz');
     assert.strictEqual(row.tier, 'hof');
     assert.strictEqual(row.is_focus, 1);
     assert.strictEqual(row.hof_induction_year, 1999);
@@ -785,6 +786,17 @@ describe('Player Metadata', () => {
     assert.throws(() => {
       db.prepare("INSERT INTO player_metadata (player_name, tier) VALUES (?, ?)").run('bad tier', 'invalid');
     });
+  });
+});
+
+describe('HOF Seeding', () => {
+  it('seeds HOF players on first run', () => {
+    const count = db.prepare("SELECT COUNT(*) as cnt FROM player_metadata WHERE tier = 'hof'").get();
+    assert.ok(count.cnt > 300, `Expected 300+ HOF players, got ${count.cnt}`);
+    const aaron = db.prepare("SELECT * FROM player_metadata WHERE player_name = 'hank aaron'").get();
+    assert.ok(aaron);
+    assert.strictEqual(aaron.tier, 'hof');
+    assert.strictEqual(aaron.hof_induction_year, 1982);
   });
 });
 
