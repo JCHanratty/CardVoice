@@ -1973,6 +1973,20 @@ function createRoutes(db) {
     res.json({ cookie: masked, hasValue: !!cookie });
   });
 
+  // POST /api/admin/tcdb/backfill — start checklist backfill for all imported sets
+  router.post('/api/admin/tcdb/backfill', async (req, res) => {
+    if (!req.app.locals.tcdbService) return res.status(500).json({ error: 'TCDB service not available' });
+    try {
+      // Run in background
+      req.app.locals.tcdbService.backfillChecklists().catch(err => {
+        console.error('[Backfill] Error:', err.message);
+      });
+      res.json({ started: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ============================================================
   // TCDB Collection Import
   // ============================================================

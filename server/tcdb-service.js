@@ -293,6 +293,56 @@ class TcdbService {
   }
 
   /**
+   * Backfill full checklists for all sets that have cards but no checklist.
+   * Runs in background, one set at a time with rate limiting.
+   */
+  async backfillChecklists() {
+    if (!this.db) return;
+    const setsToBackfill = this.db.prepare(`
+      SELECT id, name, year, tcdb_set_id FROM card_sets
+      WHERE checklist_imported = 0 AND tcdb_set_id IS NOT NULL
+      ORDER BY year DESC
+    `).all();
+
+    if (setsToBackfill.length === 0) {
+      this._status = { running: false, phase: 'done', progress: null, result: { message: 'All checklists up to date' }, error: null };
+      return;
+    }
+
+    this._log = [];
+    this._status = {
+      running: true,
+      phase: 'backfilling',
+      progress: { current: 0, total: setsToBackfill.length, currentItem: 'Starting checklist backfill...' },
+      result: null,
+      error: null,
+      startedAt: Date.now(),
+    };
+
+    let completed = 0;
+    for (const set of setsToBackfill) {
+      if (!this._status.running) break; // cancelled
+      this._status.progress = { current: completed, total: setsToBackfill.length, currentItem: `${set.name} (${set.year})` };
+      try {
+        await this.importSet(set.tcdb_set_id, set.year);
+        this.db.prepare('UPDATE card_sets SET checklist_imported = 1 WHERE id = ?').run(set.id);
+        completed++;
+      } catch (err) {
+        this._log.push(`ERROR: ${set.name}: ${err.message}`);
+      }
+    }
+
+    this._status = {
+      running: false,
+      phase: 'done',
+      progress: { current: completed, total: setsToBackfill.length, currentItem: 'Backfill complete' },
+      result: { sets_backfilled: completed, total: setsToBackfill.length },
+      error: null,
+      startedAt: this._status.startedAt,
+    };
+  }
+
+  /**
    * Cancel a running scraper process.
    */
   cancel() {
