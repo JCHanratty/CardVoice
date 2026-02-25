@@ -379,15 +379,18 @@ class TcdbService {
     };
 
     let completed = 0;
+    this._log.push(`Found ${setsToBackfill.length} sets to backfill`);
     for (const set of setsToBackfill) {
       if (!this._status.running) break; // cancelled
       this._status.progress = { current: completed, total: setsToBackfill.length, currentItem: `${set.name} (${set.year})` };
+      this._log.push(`[${completed + 1}/${setsToBackfill.length}] ${set.name} (${set.year})...`);
       try {
         await this.importSet(set.tcdb_set_id, set.year);
         this.db.prepare('UPDATE card_sets SET checklist_imported = 1 WHERE id = ?').run(set.id);
         completed++;
+        this._log.push(`  Done`);
       } catch (err) {
-        this._log.push(`ERROR: ${set.name}: ${err.message}`);
+        this._log.push(`  ERROR: ${err.message}`);
       }
     }
 
@@ -407,6 +410,8 @@ class TcdbService {
   cancel() {
     if (this._process) {
       this._process.kill('SIGTERM');
+    }
+    if (this._status.running) {
       this._status = { running: false, phase: 'idle', progress: null, result: null, error: 'Cancelled' };
     }
   }

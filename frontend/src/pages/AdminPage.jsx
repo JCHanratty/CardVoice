@@ -40,6 +40,13 @@ export default function AdminPage() {
   const [collectionResult, setCollectionResult] = useState(null);
   const [backfillRunning, setBackfillRunning] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState('');
+  const [showBackfillModal, setShowBackfillModal] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState(null);
+  const [backfillLog, setBackfillLog] = useState([]);
+  const [backfillPhase, setBackfillPhase] = useState('');
+  const [backfillStartedAt, setBackfillStartedAt] = useState(null);
+  const [backfillResult, setBackfillResult] = useState(null);
+  const backfillLogEndRef = useRef(null);
 
   const checkForUpdates = async () => {
     if (!window.electronAPI?.checkForUpdates) {
@@ -254,12 +261,46 @@ export default function AdminPage() {
   const startBackfill = async () => {
     setBackfillRunning(true);
     setBackfillStatus('Starting checklist backfill...');
+    setBackfillResult(null);
+    setBackfillLog([]);
+    setBackfillProgress(null);
+    setBackfillPhase('starting');
+    setBackfillStartedAt(Date.now());
+    setShowBackfillModal(true);
     try {
       await axios.post(`${API}/api/admin/tcdb/backfill`);
-      setBackfillStatus('Backfill started in background. Check back later.');
+      const interval = setInterval(async () => {
+        try {
+          const res = await axios.get(`${API}/api/admin/tcdb/status`);
+          const s = res.data;
+          setBackfillLog(s.log || []);
+          setBackfillProgress(s.progress);
+          setBackfillPhase(s.phase || 'idle');
+          if (!s.running && s.phase !== 'idle') {
+            clearInterval(interval);
+            setBackfillRunning(false);
+            if (s.phase === 'done') {
+              setBackfillResult(s.result);
+              setBackfillStatus('Done!');
+            } else if (s.phase === 'error') {
+              setBackfillStatus(`Error: ${s.error}`);
+            }
+          }
+        } catch (e) {
+          clearInterval(interval);
+          setBackfillRunning(false);
+        }
+      }, 1000);
     } catch (err) {
       setBackfillStatus(`Error: ${err.response?.data?.error || err.message}`);
+      setBackfillRunning(false);
     }
+  };
+
+  const cancelBackfill = async () => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/cancel`);
+    } catch (e) { /* ignore */ }
   };
 
   const formatElapsed = (startedAt) => {
@@ -281,6 +322,12 @@ export default function AdminPage() {
       collectionLogEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [collectionLog]);
+
+  useEffect(() => {
+    if (backfillLogEndRef.current) {
+      backfillLogEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [backfillLog]);
 
   const filteredSets = sets.filter(s =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -500,8 +547,105 @@ export default function AdminPage() {
           className="px-4 py-2 rounded-lg text-sm bg-cv-accent text-white font-medium disabled:opacity-50 hover:bg-cv-accent/80">
           {backfillRunning ? 'Running...' : 'Start Backfill'}
         </button>
-        {backfillStatus && <p className="text-xs text-cv-muted mt-2">{backfillStatus}</p>}
+        {backfillResult && !showBackfillModal && (
+          <div className="mt-3 bg-cv-accent/10 border border-cv-accent/30 rounded-lg p-3">
+            <div className="text-sm text-cv-accent font-semibold">Backfill Complete!</div>
+            <div className="text-xs text-cv-muted mt-1">
+              {backfillResult.sets_backfilled || 0} of {backfillResult.total || 0} sets backfilled
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Backfill Progress Modal */}
+      {showBackfillModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-cv-panel border border-cv-border rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl">
+            <h2 className="text-lg font-display font-bold text-cv-text mb-1">
+              Checklist Backfill
+            </h2>
+
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-xs font-semibold uppercase tracking-wider text-cv-accent">
+                {backfillPhase === 'backfilling' && 'Backfilling checklists...'}
+                {backfillPhase === 'done' && 'Backfill Complete'}
+                {backfillPhase === 'error' && 'Backfill Failed'}
+                {(backfillPhase === 'starting' || backfillPhase === 'idle') && 'Starting...'}
+              </span>
+              <span className="text-xs text-cv-muted font-mono">
+                {formatElapsed(backfillStartedAt)}
+              </span>
+            </div>
+
+            {backfillProgress?.total > 0 && (
+              <div className="w-full h-1.5 bg-cv-border/50 rounded-full mb-2 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min(100, Math.round((backfillProgress.current / backfillProgress.total) * 100))}%` }}
+                />
+              </div>
+            )}
+            {backfillProgress && (
+              <div className="flex items-center justify-between text-xs text-cv-muted mb-3">
+                <span className="truncate flex-1 mr-2">{backfillProgress.currentItem || 'Starting...'}</span>
+                {backfillProgress.total > 0 && (
+                  <span className="font-mono whitespace-nowrap">{backfillProgress.current}/{backfillProgress.total}</span>
+                )}
+              </div>
+            )}
+
+            <div className="bg-cv-dark/80 rounded-lg border border-cv-border/30 p-3 h-48 overflow-y-auto font-mono text-[11px] leading-relaxed text-cv-muted mb-4">
+              {backfillLog.length > 0 ? (
+                backfillLog.map((line, i) => (
+                  <div key={i} className={line.startsWith('ERROR') ? 'text-red-400' : i === backfillLog.length - 1 ? 'text-cv-text' : ''}>{line}</div>
+                ))
+              ) : (
+                <div className="text-cv-muted/50">Starting backfill...</div>
+              )}
+              <div ref={backfillLogEndRef} />
+            </div>
+
+            {backfillPhase === 'done' && backfillResult && (
+              <div className="mb-4 p-3 rounded-lg bg-green-900/20 border border-green-500/30">
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle size={16} className="text-green-400" />
+                  <span className="text-sm font-semibold text-green-400">Backfill Complete</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-xs">
+                  <span className="text-cv-muted">Sets backfilled:</span>
+                  <span className="text-cv-text font-mono">{backfillResult.sets_backfilled || 0}</span>
+                  <span className="text-cv-muted">Total sets:</span>
+                  <span className="text-cv-text font-mono">{backfillResult.total || 0}</span>
+                </div>
+              </div>
+            )}
+
+            {backfillPhase === 'error' && (
+              <div className="mb-4 p-3 rounded-lg bg-red-900/20 border border-red-500/30 text-red-400 text-sm">
+                {backfillStatus}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              {backfillRunning ? (
+                <button
+                  onClick={cancelBackfill}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-all"
+                >
+                  Cancel Backfill
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowBackfillModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Browse Section */}
       <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">
