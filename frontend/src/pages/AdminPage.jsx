@@ -350,7 +350,7 @@ export default function AdminPage() {
       <div className="bg-cv-panel rounded-xl border border-cv-border p-4 mb-4">
         <h3 className="text-sm font-semibold text-cv-text mb-3">Import TCDB Collection</h3>
         <p className="text-xs text-cv-muted mb-3">
-          Import your entire TCDB collection into CardVoice. Enter your TCDB username and click Import, or paste JSON data from the browser console scraper.
+          Import your entire TCDB collection into CardVoice. Chrome will open and you can log into TCDB — the scraper reads all your collection pages automatically. Or paste JSON data directly.
         </p>
         <div className="flex gap-2 items-end">
           <div className="flex-1">

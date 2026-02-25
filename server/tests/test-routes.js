@@ -14,7 +14,15 @@ function makeApp() {
   const db = openDb(':memory:');
   const app = express();
   app.use(express.json());
-  app.locals.tcdbService = new TcdbService({ db });
+  // Create a lightweight TcdbService for testing — skip python detection
+  const tcdb = Object.create(TcdbService.prototype);
+  tcdb.db = db;
+  tcdb.scraperDir = __dirname;
+  tcdb.outputDir = __dirname;
+  tcdb._status = { running: false, phase: 'idle', progress: null, result: null, error: null };
+  tcdb._log = [];
+  tcdb._process = null;
+  app.locals.tcdbService = tcdb;
   app.use(createRoutes(db));
   return { app, db };
 }
@@ -933,8 +941,8 @@ describe('Player Enrichment', () => {
 // TCDB Collection Import API
 // ============================================================
 describe('TCDB Collection Import API', () => {
-  it('POST /api/admin/tcdb/collection/import returns 400 without cookie', async () => {
-    const { status } = await api('POST', '/api/admin/tcdb/collection/import', { member: 'test' });
+  it('POST /api/admin/tcdb/collection/import returns 400 without member', async () => {
+    const { status } = await api('POST', '/api/admin/tcdb/collection/import', {});
     assert.strictEqual(status, 400);
   });
 

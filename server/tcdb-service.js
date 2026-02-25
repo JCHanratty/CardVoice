@@ -178,22 +178,24 @@ class TcdbService {
 
   /**
    * Import a user's entire TCDB collection.
-   * Spawns collection_scraper.py with the session cookie.
+   * Uses browser_scraper.py (undetected Chrome) — no cookies needed.
+   * Chrome opens, user logs in if needed, scraper reads all pages.
    */
   async importCollection(cookie, member) {
     this._log = [];
     this._status = {
       running: true,
       phase: 'collection-scrape',
-      progress: { current: 0, total: 0, currentItem: 'Starting collection scraper...' },
+      progress: { current: 0, total: 0, currentItem: 'Launching browser scraper...' },
       result: null,
       error: null,
       startedAt: Date.now(),
     };
 
     try {
-      // Step 1: Run collection scraper
-      const scrapeResult = await this._runCollectionScraper(cookie, member);
+      // Step 1: Run browser scraper (opens Chrome, user logs in)
+      this._log.push('Opening Chrome — log into TCDB if prompted...');
+      const scrapeResult = await this._runBrowserScraper(member);
 
       // Step 2: Import into CardVoice DB
       this._status.phase = 'collection-import';
@@ -224,13 +226,13 @@ class TcdbService {
   }
 
   /**
-   * Low-level: spawn collection_scraper.py with args, return parsed JSON from stdout.
-   * Separate from _runScraperRaw because it uses a different script.
+   * Run browser_scraper.py with undetected-chromedriver.
+   * Opens a real Chrome window for the user to log in.
    */
-  _runCollectionScraper(cookie, member) {
+  _runBrowserScraper(member) {
     return new Promise((resolve, reject) => {
-      const scriptPath = path.join(this.scraperDir, 'collection_scraper.py');
-      const args = [scriptPath, '--cookie', cookie, '--member', member, '--json', '--output-dir', this.outputDir];
+      const scriptPath = path.join(this.scraperDir, 'browser_scraper.py');
+      const args = [scriptPath, '--member', member, '--json', '--output-dir', this.outputDir];
       const proc = spawn(this.python, args, {
         cwd: this.scraperDir,
         env: { ...process.env },
@@ -266,19 +268,19 @@ class TcdbService {
       proc.on('close', (code) => {
         this._process = null;
         if (code !== 0) {
-          return reject(new Error(`Collection scraper exited with code ${code}: ${stderr.slice(0, 500)}`));
+          return reject(new Error(`Browser scraper exited with code ${code}: ${stderr.slice(0, 500)}`));
         }
         try {
           const result = JSON.parse(stdout);
           resolve(result);
         } catch (e) {
-          reject(new Error(`Failed to parse collection scraper output: ${e.message}\nstdout: ${stdout.slice(0, 500)}`));
+          reject(new Error(`Failed to parse scraper output: ${e.message}\nstdout: ${stdout.slice(0, 500)}`));
         }
       });
 
       proc.on('error', (err) => {
         this._process = null;
-        reject(new Error(`Failed to spawn collection scraper: ${err.message}`));
+        reject(new Error(`Failed to spawn browser scraper: ${err.message}`));
       });
     });
   }

@@ -2052,18 +2052,18 @@ function createRoutes(db) {
 
   router.post('/api/admin/tcdb/collection/import', async (req, res) => {
     const { member } = req.body;
-    const { getMeta } = require('./db');
-    const cookie = getMeta(db, 'tcdb_session_cookie');
-    if (!cookie) return res.status(400).json({ error: 'TCDB cookie not set. Go to Settings to add your session cookie.' });
     if (!member) return res.status(400).json({ error: 'TCDB member username required' });
     if (!req.app.locals.tcdbService) return res.status(500).json({ error: 'TCDB service not available' });
     const tcdb = req.app.locals.tcdbService;
     if (tcdb.getStatus().running) return res.json({ message: 'Import already running' });
-    // Fire and forget — frontend polls /api/admin/tcdb/status
+    // Fire and forget — browser scraper opens Chrome, user logs in, scrapes all pages
+    // Frontend polls /api/admin/tcdb/status for live progress
+    const { getMeta } = require('./db');
+    const cookie = getMeta(db, 'tcdb_session_cookie') || '';
     tcdb.importCollection(cookie, member).catch(err => {
       console.error('[TCDB] Collection import failed:', err.message);
     });
-    res.json({ message: 'Collection import started' });
+    res.json({ message: 'Collection import started — Chrome will open for login' });
   });
 
   // POST /api/admin/tcdb/collection/import-json — direct JSON import (bypass Cloudflare)
