@@ -177,6 +177,122 @@ class TcdbService {
   }
 
   /**
+   * Import a user's entire TCDB collection.
+   * Spawns collection_scraper.py with the session cookie.
+   */
+  async importCollection(cookie, member) {
+    this._log = [];
+    this._status = {
+      running: true,
+      phase: 'collection-import',
+      progress: { current: 0, total: 3, currentItem: 'Scraping collection pages...' },
+      result: null,
+      error: null,
+      startedAt: Date.now(),
+    };
+
+    try {
+      // Step 1: Run collection scraper
+      const scriptPath = path.join(this.scraperDir, 'collection_scraper.py');
+      const args = [
+        scriptPath, '--cookie', cookie, '--member', member,
+        '--json', '--output-dir', this.outputDir,
+      ];
+      const scrapeResult = await this._runScraperRaw(args);
+
+      // Step 2: Import into CardVoice DB
+      this._status.phase = 'importing';
+      this._status.progress = { current: 1, total: 3, currentItem: 'Importing cards into CardVoice...' };
+
+      const importResult = this._importCollectionData(scrapeResult);
+
+      // Step 3: Done
+      this._status = {
+        running: false,
+        phase: 'done',
+        progress: { current: 3, total: 3, currentItem: 'Complete' },
+        result: { scrape: scrapeResult, import: importResult },
+        error: null,
+        startedAt: this._status.startedAt,
+      };
+
+      return this._status.result;
+    } catch (err) {
+      this._status = {
+        running: false, phase: 'error', progress: null, result: null,
+        error: err.message, startedAt: this._status.startedAt,
+      };
+      throw err;
+    }
+  }
+
+  /**
+   * Import scraped collection data into the user's DB.
+   */
+  _importCollectionData(scrapeResult) {
+    if (!this.db || !scrapeResult?.sets) return { skipped: true };
+
+    const findSetByTcdbId = this.db.prepare('SELECT id FROM card_sets WHERE tcdb_set_id = ?');
+    const findSetByNameYear = this.db.prepare('SELECT id FROM card_sets WHERE name = ? AND year = ?');
+    const createSet = this.db.prepare('INSERT INTO card_sets (name, year, brand, sport, tcdb_set_id) VALUES (?, ?, ?, ?, ?)');
+    const findCard = this.db.prepare('SELECT id, qty FROM cards WHERE set_id = ? AND card_number = ? AND insert_type = ? AND parallel = ?');
+    const insertCard = this.db.prepare('INSERT INTO cards (set_id, card_number, player, team, rc_sp, insert_type, parallel, qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const updateCardQty = this.db.prepare('UPDATE cards SET qty = ?, player = CASE WHEN player = ? THEN ? ELSE player END WHERE id = ?');
+    const upsertInsertType = this.db.prepare('INSERT INTO set_insert_types (set_id, name) VALUES (?, ?) ON CONFLICT(set_id, name) DO NOTHING');
+
+    const results = { sets_created: 0, sets_matched: 0, cards_added: 0, cards_updated: 0 };
+
+    const doImport = this.db.transaction(() => {
+      for (const setGroup of scrapeResult.sets) {
+        const { tcdb_set_id, set_name, year, cards } = setGroup;
+        const brand = set_name.split(' ').find(w => ['Topps', 'Bowman', 'Panini', 'Donruss', 'Upper', 'Fleer', 'Score'].includes(w)) || 'Unknown';
+
+        // Match set: tcdb_set_id first, then name+year fallback
+        let setRow = findSetByTcdbId.get(tcdb_set_id);
+        if (!setRow) {
+          setRow = findSetByNameYear.get(set_name, year);
+        }
+        let userSetId;
+        if (setRow) {
+          userSetId = setRow.id;
+          results.sets_matched++;
+          // Update tcdb_set_id if not set
+          this.db.prepare('UPDATE card_sets SET tcdb_set_id = COALESCE(tcdb_set_id, ?) WHERE id = ?').run(tcdb_set_id, userSetId);
+        } else {
+          const info = createSet.run(set_name, year, brand, 'Baseball', tcdb_set_id);
+          userSetId = Number(info.lastInsertRowid);
+          results.sets_created++;
+        }
+
+        // Register "Base" insert type for this set
+        upsertInsertType.run(userSetId, 'Base');
+
+        for (const card of cards) {
+          const insertType = 'Base';
+          const parallel = '';
+          const existing = findCard.get(userSetId, card.card_number, insertType, parallel);
+          if (existing) {
+            if (card.qty > existing.qty) {
+              updateCardQty.run(card.qty, '', card.player, existing.id);
+            }
+            results.cards_updated++;
+          } else {
+            insertCard.run(userSetId, card.card_number, card.player, '', card.rc_sp || '', insertType, parallel, card.qty);
+            results.cards_added++;
+          }
+        }
+
+        // Update total_cards count
+        const count = this.db.prepare('SELECT COUNT(*) as cnt FROM cards WHERE set_id = ?').get(userSetId);
+        this.db.prepare('UPDATE card_sets SET total_cards = ? WHERE id = ?').run(count.cnt, userSetId);
+      }
+    });
+
+    doImport();
+    return results;
+  }
+
+  /**
    * Cancel a running scraper process.
    */
   cancel() {

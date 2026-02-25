@@ -925,3 +925,28 @@ describe('Player Enrichment', () => {
     assert.strictEqual(nobody.player_tier, null);
   });
 });
+
+
+// ============================================================
+// TCDB Collection Import API
+// ============================================================
+describe('TCDB Collection Import API', () => {
+  it('POST /api/admin/tcdb/collection/import returns 400 without cookie', async () => {
+    const { status } = await api('POST', '/api/admin/tcdb/collection/import', { member: 'test' });
+    assert.strictEqual(status, 400);
+  });
+
+  it('PUT /api/settings/tcdb-cookie saves cookie', async () => {
+    const { status } = await api('PUT', '/api/settings/tcdb-cookie', { cookie: 'CFID=123;CFTOKEN=abc' });
+    assert.strictEqual(status, 200);
+    const row = db.prepare("SELECT value FROM app_meta WHERE key = 'tcdb_session_cookie'").get();
+    assert.ok(row.value.includes('CFID=123'));
+  });
+
+  it('GET /api/settings/tcdb-cookie returns masked cookie', async () => {
+    db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('tcdb_session_cookie', 'CFID=123456;CFTOKEN=abcdef')").run();
+    const { data } = await api('GET', '/api/settings/tcdb-cookie');
+    assert.ok(data.cookie);
+    assert.ok(data.cookie.includes('***')); // masked
+  });
+});

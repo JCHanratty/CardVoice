@@ -1953,6 +1953,45 @@ function createRoutes(db) {
     res.json({ message: 'Cancelled' });
   });
 
+  // ============================================================
+  // TCDB Cookie Settings
+  // ============================================================
+
+  router.put('/api/settings/tcdb-cookie', (req, res) => {
+    const { cookie } = req.body;
+    if (!cookie) return res.status(400).json({ error: 'cookie required' });
+    const { setMeta } = require('./db');
+    setMeta(db, 'tcdb_session_cookie', cookie);
+    res.json({ ok: true });
+  });
+
+  router.get('/api/settings/tcdb-cookie', (req, res) => {
+    const { getMeta } = require('./db');
+    const cookie = getMeta(db, 'tcdb_session_cookie') || '';
+    // Mask cookie values for display
+    const masked = cookie.replace(/=([^;]+)/g, (m, val) => '=' + val.slice(0, 3) + '***');
+    res.json({ cookie: masked, hasValue: !!cookie });
+  });
+
+  // ============================================================
+  // TCDB Collection Import
+  // ============================================================
+
+  router.post('/api/admin/tcdb/collection/import', async (req, res) => {
+    const { member } = req.body;
+    const { getMeta } = require('./db');
+    const cookie = getMeta(db, 'tcdb_session_cookie');
+    if (!cookie) return res.status(400).json({ error: 'TCDB cookie not set. Go to Settings to add your session cookie.' });
+    if (!member) return res.status(400).json({ error: 'TCDB member username required' });
+    if (!req.app.locals.tcdbService) return res.status(500).json({ error: 'TCDB service not available' });
+    try {
+      const result = await req.app.locals.tcdbService.importCollection(cookie, member);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 }
 
