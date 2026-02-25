@@ -852,3 +852,56 @@ describe('Player Matching', () => {
     assert.strictEqual(result, null);
   });
 });
+
+
+// ============================================================
+// Player Metadata API
+// ============================================================
+describe('Player Metadata API', () => {
+  it('GET /api/player-metadata returns all players', async () => {
+    const { status, data } = await api('GET', '/api/player-metadata');
+    assert.strictEqual(status, 200);
+    assert.ok(Array.isArray(data));
+    assert.ok(data.length > 300); // HOF seeds
+  });
+
+  it('GET /api/player-metadata?tier=hof filters by tier', async () => {
+    const { data } = await api('GET', '/api/player-metadata?tier=hof');
+    assert.ok(data.every(p => p.tier === 'hof'));
+  });
+
+  it('GET /api/player-metadata?is_focus=1 filters focus players', async () => {
+    db.prepare("INSERT OR REPLACE INTO player_metadata (player_name, tier, is_focus) VALUES (?, ?, ?)").run('test api focus', 'star', 1);
+    const { data } = await api('GET', '/api/player-metadata?is_focus=1');
+    assert.ok(data.some(p => p.player_name === 'test api focus'));
+  });
+
+  it('PUT /api/player-metadata/:name sets tier and focus', async () => {
+    const { status } = await api('PUT', '/api/player-metadata/mike%20trout', { tier: 'future_hof', is_focus: 1 });
+    assert.strictEqual(status, 200);
+    const row = db.prepare("SELECT * FROM player_metadata WHERE player_name = 'mike trout'").get();
+    assert.strictEqual(row.tier, 'future_hof');
+    assert.strictEqual(row.is_focus, 1);
+  });
+
+  it('PUT /api/player-metadata/:name/focus toggles focus', async () => {
+    db.prepare("INSERT OR IGNORE INTO player_metadata (player_name) VALUES (?)").run('focus toggle test');
+    const { status } = await api('PUT', '/api/player-metadata/focus%20toggle%20test/focus', { is_focus: 1 });
+    assert.strictEqual(status, 200);
+    const row = db.prepare("SELECT * FROM player_metadata WHERE player_name = 'focus toggle test'").get();
+    assert.strictEqual(row.is_focus, 1);
+  });
+
+  it('DELETE /api/player-metadata/:name removes non-HOF player', async () => {
+    db.prepare("INSERT OR IGNORE INTO player_metadata (player_name, tier) VALUES (?, ?)").run('delete me', 'star');
+    const { status } = await api('DELETE', '/api/player-metadata/delete%20me');
+    assert.strictEqual(status, 200);
+    const row = db.prepare("SELECT * FROM player_metadata WHERE player_name = 'delete me'").get();
+    assert.ok(!row);
+  });
+
+  it('GET /api/player-metadata/search?q=ryan finds matches', async () => {
+    const { data } = await api('GET', '/api/player-metadata/search?q=ryan');
+    assert.ok(data.some(p => p.player_name.includes('ryan')));
+  });
+});

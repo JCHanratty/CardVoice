@@ -1824,6 +1824,63 @@ function createRoutes(db) {
   });
 
   // ============================================================
+  // Player Metadata
+  // ============================================================
+
+  // GET /api/player-metadata — list all (filterable by tier, is_focus)
+  router.get('/api/player-metadata', (req, res) => {
+    let sql = 'SELECT * FROM player_metadata WHERE 1=1';
+    const params = [];
+    if (req.query.tier) { sql += ' AND tier = ?'; params.push(req.query.tier); }
+    if (req.query.is_focus === '1') { sql += ' AND is_focus = 1'; }
+    sql += ' ORDER BY player_name';
+    res.json(db.prepare(sql).all(...params));
+  });
+
+  // GET /api/player-metadata/search?q=... — search by name substring
+  router.get('/api/player-metadata/search', (req, res) => {
+    const q = (req.query.q || '').toLowerCase().trim();
+    if (!q) return res.json([]);
+    res.json(db.prepare("SELECT * FROM player_metadata WHERE player_name LIKE ? ORDER BY player_name LIMIT 50").all(`%${q}%`));
+  });
+
+  // PUT /api/player-metadata/:name — upsert tier/focus for a player
+  router.put('/api/player-metadata/:name', (req, res) => {
+    const name = decodeURIComponent(req.params.name).toLowerCase().trim();
+    const { tier, is_focus } = req.body;
+    db.prepare(`
+      INSERT INTO player_metadata (player_name, tier, is_focus, focus_added_at)
+      VALUES (?, ?, ?, CASE WHEN ? = 1 THEN datetime('now','localtime') ELSE NULL END)
+      ON CONFLICT(player_name) DO UPDATE SET
+        tier = COALESCE(excluded.tier, player_metadata.tier),
+        is_focus = excluded.is_focus,
+        focus_added_at = CASE WHEN excluded.is_focus = 1 AND player_metadata.is_focus = 0 THEN datetime('now','localtime') ELSE player_metadata.focus_added_at END
+    `).run(name, tier || null, is_focus ? 1 : 0, is_focus ? 1 : 0);
+    res.json({ ok: true });
+  });
+
+  // PUT /api/player-metadata/:name/focus — toggle focus only
+  router.put('/api/player-metadata/:name/focus', (req, res) => {
+    const name = decodeURIComponent(req.params.name).toLowerCase().trim();
+    const { is_focus } = req.body;
+    db.prepare(`
+      INSERT INTO player_metadata (player_name, is_focus, focus_added_at)
+      VALUES (?, ?, CASE WHEN ? = 1 THEN datetime('now','localtime') ELSE NULL END)
+      ON CONFLICT(player_name) DO UPDATE SET
+        is_focus = excluded.is_focus,
+        focus_added_at = CASE WHEN excluded.is_focus = 1 THEN datetime('now','localtime') ELSE player_metadata.focus_added_at END
+    `).run(name, is_focus ? 1 : 0, is_focus ? 1 : 0);
+    res.json({ ok: true });
+  });
+
+  // DELETE /api/player-metadata/:name — remove a player (not HOF)
+  router.delete('/api/player-metadata/:name', (req, res) => {
+    const name = decodeURIComponent(req.params.name).toLowerCase().trim();
+    db.prepare("DELETE FROM player_metadata WHERE player_name = ? AND tier != 'hof'").run(name);
+    res.json({ ok: true });
+  });
+
+  // ============================================================
   // TCDB Admin Endpoints
   // ============================================================
 
