@@ -229,6 +229,19 @@ export default function SetDetail() {
     loadMetadata();
   };
 
+  const toggleFocusPlayer = async (playerName, currentFocus) => {
+    const normalized = playerName.toLowerCase().replace(/[.,]/g, '').replace(/\b(jr|sr|ii|iii|iv)\b/gi, '').replace(/\s+/g, ' ').trim();
+    const newFocus = !currentFocus;
+    try {
+      await axios.put(`${API}/api/player-metadata/${encodeURIComponent(normalized)}/focus`, { is_focus: newFocus ? 1 : 0 });
+      // Refresh cards
+      const res = await axios.get(`${API}/api/sets/${setId}`);
+      setCards(res.data.cards || []);
+    } catch (err) {
+      console.error('Failed to toggle focus:', err);
+    }
+  };
+
   const [bulkMessage, setBulkMessage] = useState(null);
 
   // Bulk ownership: own all / clear all for current filter scope
@@ -825,7 +838,7 @@ export default function SetDetail() {
               ) : null;
               return (<React.Fragment key={card.id}>
               {groupHeader}
-              <tr className={`border-b border-cv-border/30 hover:bg-white/[0.02] transition-colors ${card.qty > 0 ? '' : ''}`}>
+              <tr className={`group border-b border-cv-border/30 hover:bg-white/[0.02] transition-colors ${card.qty > 0 ? '' : ''}`}>
                 {editingId === card.id ? (
                   <>
                     <td></td>
@@ -878,7 +891,32 @@ export default function SetDetail() {
                       </button>
                     </td>
                     <td className="px-3 py-2 text-cv-text font-mono">{card.card_number}</td>
-                    <td className="px-3 py-2 text-cv-text">{card.player || '-'}</td>
+                    <td className={`px-3 py-2 ${card.is_focus_player ? 'bg-yellow-500/5' : ''}`}>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-cv-text">{card.player || '-'}</span>
+                        {card.player_tier === 'hof' && (
+                          <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">HOF</span>
+                        )}
+                        {card.player_tier === 'future_hof' && (
+                          <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-gray-400/20 text-gray-300 border border-gray-400/30">F-HOF</span>
+                        )}
+                        {card.player_tier === 'key_rookie' && (
+                          <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-green-500/20 text-green-400 border border-green-500/30">KEY RC</span>
+                        )}
+                        {card.player_tier === 'star' && (
+                          <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">STAR</span>
+                        )}
+                        {card.player && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); toggleFocusPlayer(card.player, card.is_focus_player); }}
+                            className={`opacity-0 group-hover:opacity-100 transition-opacity text-sm ${card.is_focus_player ? 'text-yellow-400 !opacity-100' : 'text-gray-600 hover:text-yellow-400'}`}
+                            title={card.is_focus_player ? 'Remove from focus players' : 'Add to focus players'}
+                          >
+                            &#9733;
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-3 py-2 text-cv-muted">{card.team || '-'}</td>
                     <td className="px-3 py-2">
                       {card.rc_sp ? (
