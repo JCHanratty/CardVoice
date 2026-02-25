@@ -31,6 +31,16 @@ export default function AdminPage() {
   const [showImportModal, setShowImportModal] = useState(false);
   const logEndRef = useRef(null);
 
+  // TCDB cookie & collection import state
+  const [tcdbCookie, setTcdbCookie] = useState('');
+  const [tcdbCookieStatus, setTcdbCookieStatus] = useState('');
+  const [tcdbMember, setTcdbMember] = useState('');
+  const [collectionImporting, setCollectionImporting] = useState(false);
+  const [collectionStatus, setCollectionStatus] = useState('');
+  const [collectionResult, setCollectionResult] = useState(null);
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillStatus, setBackfillStatus] = useState('');
+
   const checkForUpdates = async () => {
     if (!window.electronAPI?.checkForUpdates) {
       setUpdateMsg('Updates only available in the desktop app');
@@ -141,6 +151,43 @@ export default function AdminPage() {
     }
   };
 
+  const saveTcdbCookie = async () => {
+    try {
+      await axios.put(`${API}/api/settings/tcdb-cookie`, { cookie: tcdbCookie });
+      setTcdbCookieStatus('Cookie saved!');
+      setTcdbCookie('');
+      setTimeout(() => setTcdbCookieStatus(''), 3000);
+    } catch (err) {
+      setTcdbCookieStatus('Failed to save');
+    }
+  };
+
+  const startCollectionImport = async () => {
+    setCollectionImporting(true);
+    setCollectionStatus('Starting collection import...');
+    setCollectionResult(null);
+    try {
+      const res = await axios.post(`${API}/api/admin/tcdb/collection/import`, { member: tcdbMember });
+      setCollectionResult(res.data?.import || res.data);
+      setCollectionStatus('Done!');
+    } catch (err) {
+      setCollectionStatus(`Error: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setCollectionImporting(false);
+    }
+  };
+
+  const startBackfill = async () => {
+    setBackfillRunning(true);
+    setBackfillStatus('Starting checklist backfill...');
+    try {
+      await axios.post(`${API}/api/admin/tcdb/backfill`);
+      setBackfillStatus('Backfill started in background. Check back later.');
+    } catch (err) {
+      setBackfillStatus(`Error: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
   const formatElapsed = (startedAt) => {
     if (!startedAt) return '0:00';
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
@@ -200,6 +247,69 @@ export default function AdminPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* TCDB Session Cookie */}
+      <div className="bg-cv-panel rounded-xl border border-cv-border p-4 mb-4">
+        <h3 className="text-sm font-semibold text-cv-text mb-3">TCDB Authentication</h3>
+        <p className="text-xs text-cv-muted mb-3">
+          Log into tcdb.com in your browser, then copy your session cookie and paste it here.
+          This allows CardVoice to import your collection.
+        </p>
+        <div className="flex gap-2">
+          <input type="text" value={tcdbCookie} onChange={e => setTcdbCookie(e.target.value)}
+            placeholder="CFID=123456;CFTOKEN=abcdef..."
+            className="flex-1 bg-cv-dark border border-cv-border rounded-lg px-3 py-2 text-sm text-cv-text font-mono focus:border-cv-accent focus:outline-none" />
+          <button onClick={saveTcdbCookie}
+            className="px-4 py-2 rounded-lg text-sm bg-cv-accent text-white font-medium hover:bg-cv-accent/80">Save</button>
+        </div>
+        {tcdbCookieStatus && <p className="text-xs text-cv-accent mt-2">{tcdbCookieStatus}</p>}
+      </div>
+
+      {/* Collection Import */}
+      <div className="bg-cv-panel rounded-xl border border-cv-border p-4 mb-4">
+        <h3 className="text-sm font-semibold text-cv-text mb-3">Import TCDB Collection</h3>
+        <p className="text-xs text-cv-muted mb-3">
+          Import your entire TCDB collection into CardVoice. This will scrape all your collection pages and create sets and cards.
+        </p>
+        <div className="flex gap-2 items-end">
+          <div className="flex-1">
+            <label className="text-xs text-cv-muted block mb-1">TCDB Username</label>
+            <input type="text" value={tcdbMember} onChange={e => setTcdbMember(e.target.value)}
+              placeholder="Jhanratty"
+              className="w-full bg-cv-dark border border-cv-border rounded-lg px-3 py-2 text-sm text-cv-text focus:border-cv-accent focus:outline-none" />
+          </div>
+          <button onClick={startCollectionImport} disabled={!tcdbMember || collectionImporting}
+            className="px-4 py-2 rounded-lg text-sm bg-gradient-to-r from-cv-accent to-cv-accent2 text-white font-medium disabled:opacity-50 hover:opacity-90">
+            {collectionImporting ? 'Importing...' : 'Import My Collection'}
+          </button>
+        </div>
+        {collectionImporting && (
+          <div className="mt-3 bg-cv-dark rounded-lg p-3 border border-cv-border">
+            <div className="text-xs text-cv-muted">{collectionStatus}</div>
+          </div>
+        )}
+        {collectionResult && (
+          <div className="mt-3 bg-cv-accent/10 border border-cv-accent/30 rounded-lg p-3">
+            <div className="text-sm text-cv-accent font-semibold">Import Complete!</div>
+            <div className="text-xs text-cv-muted mt-1">
+              {collectionResult.sets_created || 0} sets created, {collectionResult.sets_matched || 0} matched, {collectionResult.cards_added || 0} cards added, {collectionResult.cards_updated || 0} updated
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Checklist Backfill */}
+      <div className="bg-cv-panel rounded-xl border border-cv-border p-4 mb-4">
+        <h3 className="text-sm font-semibold text-cv-text mb-3">Checklist Backfill</h3>
+        <p className="text-xs text-cv-muted mb-3">
+          After importing your collection, backfill full checklists so you can track which cards you're missing.
+        </p>
+        <button onClick={startBackfill} disabled={backfillRunning}
+          className="px-4 py-2 rounded-lg text-sm bg-cv-accent text-white font-medium disabled:opacity-50 hover:bg-cv-accent/80">
+          {backfillRunning ? 'Running...' : 'Start Backfill'}
+        </button>
+        {backfillStatus && <p className="text-xs text-cv-muted mt-2">{backfillStatus}</p>}
       </div>
 
       {/* Browse Section */}
