@@ -148,99 +148,41 @@ function setupAutoUpdater() {
 }
 
 /**
- * Quit-and-install: spawn the NSIS installer directly from Node.js
- * as a fully detached process, then hard-exit.
+ * Quit-and-install: close everything cleanly, then let electron-updater
+ * handle the NSIS installer with its built-in quitAndInstall().
  *
- * Previous approach used .bat/.vbs wrappers, but NSIS silently failed
- * (exit code 1) when launched from an invisible VBScript session —
- * it nuked the old install then crashed, leaving nothing.
+ * Previous custom approaches (bat/vbs scripts, direct spawn with /S)
+ * all failed because NSIS silent mode (/S) exits with code 1 —
+ * it removes the old install but never writes the new one.
  *
- * This approach works because:
- * 1. Node.js spawn() inherits our desktop session, giving NSIS the
- *    interactive context it needs
- * 2. NSIS --updated flag tells the installer to wait for the old app
- *    to exit before proceeding
- * 3. detached + unref() lets the installer outlive our process
- * 4. runAfterFinish: true in nsis config relaunches the app after install
+ * The fix: don't use /S. Let electron-updater run the oneClick installer
+ * normally. The user sees a brief install progress bar (a few seconds),
+ * then the app relaunches. This is reliable and better UX than the app
+ * just vanishing.
  */
-function findDownloadedInstaller() {
-  // 1. Use the path from electron-updater if available
-  if (downloadedInstallerPath && fs.existsSync(downloadedInstallerPath)) {
-    return downloadedInstallerPath;
-  }
-
-  // 2. Search the electron-updater cache in LOCALAPPDATA
-  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local');
-  const cacheDir = path.join(localAppData, 'cardvoice-updater', 'pending');
-  console.log('[Update] Searching updater cache:', cacheDir);
-  try {
-    if (fs.existsSync(cacheDir)) {
-      const files = fs.readdirSync(cacheDir).filter(f => f.endsWith('.exe') && !f.startsWith('temp-'));
-      if (files.length > 0) {
-        const found = path.join(cacheDir, files[0]);
-        console.log('[Update] Found installer in cache:', found);
-        return found;
-      }
-    }
-  } catch (e) {
-    console.error('[Update] Cache search failed:', e.message);
-  }
-
-  // 3. Fallback: check ROAMING path (older electron-updater versions)
-  const roamingCache = path.join(app.getPath('userData'), '..', 'cardvoice-updater', 'pending');
-  try {
-    if (fs.existsSync(roamingCache)) {
-      const files = fs.readdirSync(roamingCache).filter(f => f.endsWith('.exe') && !f.startsWith('temp-'));
-      if (files.length > 0) {
-        const found = path.join(roamingCache, files[0]);
-        console.log('[Update] Found installer in roaming cache:', found);
-        return found;
-      }
-    }
-  } catch (e) {}
-
-  return null;
-}
-
 function quitAndInstallViaScript() {
-  const installerPath = findDownloadedInstaller();
-  if (!installerPath) {
-    console.error('[Update] No downloaded installer found. downloadedInstallerPath was:', downloadedInstallerPath);
-    // Last resort fallback
-    autoUpdater.quitAndInstall(true, true);
-    setTimeout(() => app.exit(0), 3000);
-    return;
-  }
+  console.log('[Update] Starting quit-and-install...');
 
-  console.log('[Update] Spawning installer directly:', installerPath);
-  console.log('[Update] PID:', process.pid);
-
-  // Spawn the NSIS installer as a fully detached process.
-  // /S = silent, --updated = tells NSIS to wait for old app to exit.
-  const child = spawn(installerPath, ['/S', '--updated'], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref();
-
-  // Close server/DB before exiting
+  // 1. Close server and DB first to release all file locks
   if (serverHandle) {
     try { serverHandle.server.close(); } catch (e) {}
     try { serverHandle.db.close(); } catch (e) {}
     serverHandle = null;
+    console.log('[Update] Server and DB closed');
   }
 
-  // Hard exit so the installer can proceed.
-  // app.exit(0) first, process.exit(0) as fallback.
-  setTimeout(() => {
-    console.log('[Update] Hard exiting for update...');
-    app.exit(0);
-  }, 500);
-  setTimeout(() => {
-    console.log('[Update] Force exiting (app.exit failed)...');
-    process.exit(0);
-  }, 3000);
+  // 2. Close the window so Electron doesn't block
+  if (mainWindow) {
+    mainWindow.removeAllListeners('close');
+    mainWindow.close();
+    mainWindow = null;
+  }
+
+  // 3. Let electron-updater handle it: isSilent=false, isForceRunAfter=true
+  //    This runs the NSIS oneClick installer with its normal UI (brief progress bar)
+  //    and relaunches the app when done.
+  console.log('[Update] Calling autoUpdater.quitAndInstall(false, true)...');
+  autoUpdater.quitAndInstall(false, true);
 }
 
 // ============================================================
