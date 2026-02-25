@@ -265,6 +265,31 @@ function openDb(dbPath) {
     `);
   } catch (_) { /* table already exists */ }
 
+  // Migration: player_metadata table
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS player_metadata (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_name        TEXT UNIQUE NOT NULL,
+        tier               TEXT CHECK(tier IN ('hof','future_hof','key_rookie','star')),
+        is_focus           INTEGER DEFAULT 0,
+        focus_added_at     DATETIME,
+        hof_induction_year INTEGER,
+        hof_position       TEXT,
+        hof_primary_team   TEXT
+      )
+    `);
+  } catch (_) {}
+
+  // Migration: card_sets columns for TCDB collection import
+  const tcdbSetCols = [
+    'ALTER TABLE card_sets ADD COLUMN checklist_imported INTEGER DEFAULT 0',
+    'ALTER TABLE card_sets ADD COLUMN tcdb_set_id INTEGER',
+  ];
+  for (const sql of tcdbSetCols) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+  }
+
   // Migration: move existing cards with parallel != '' into card_parallels
   _migrateParallelCards(db);
 

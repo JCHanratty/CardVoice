@@ -761,3 +761,43 @@ describe('Parallel Card Migration', () => {
     assert.strictEqual(base.parallel, '');
   });
 });
+
+describe('Player Metadata', () => {
+  it('can insert and query player_metadata', () => {
+    const result = db.prepare(
+      "INSERT INTO player_metadata (player_name, tier, is_focus, hof_induction_year, hof_position) VALUES (?, ?, ?, ?, ?)"
+    ).run('nolan ryan', 'hof', 1, 1999, 'P');
+    const row = db.prepare("SELECT * FROM player_metadata WHERE id = ?").get(result.lastInsertRowid);
+    assert.strictEqual(row.player_name, 'nolan ryan');
+    assert.strictEqual(row.tier, 'hof');
+    assert.strictEqual(row.is_focus, 1);
+    assert.strictEqual(row.hof_induction_year, 1999);
+  });
+
+  it('enforces unique player_name', () => {
+    db.prepare("INSERT OR IGNORE INTO player_metadata (player_name, tier) VALUES (?, ?)").run('frank thomas', 'hof');
+    assert.throws(() => {
+      db.prepare("INSERT INTO player_metadata (player_name, tier) VALUES (?, ?)").run('frank thomas', 'star');
+    });
+  });
+
+  it('enforces tier CHECK constraint', () => {
+    assert.throws(() => {
+      db.prepare("INSERT INTO player_metadata (player_name, tier) VALUES (?, ?)").run('bad tier', 'invalid');
+    });
+  });
+});
+
+describe('card_sets migrations', () => {
+  it('has checklist_imported column', () => {
+    const set = db.prepare("INSERT INTO card_sets (name, year, brand, sport) VALUES (?, ?, ?, ?)").run('ChecklistImportedTest', 2025, 'Topps', 'Baseball');
+    const row = db.prepare("SELECT checklist_imported FROM card_sets WHERE id = ?").get(set.lastInsertRowid);
+    assert.strictEqual(row.checklist_imported, 0);
+  });
+
+  it('has tcdb_set_id column', () => {
+    const set = db.prepare("INSERT INTO card_sets (name, year, brand, sport, tcdb_set_id) VALUES (?, ?, ?, ?, ?)").run('TcdbSetIdTest', 2025, 'Topps', 'Baseball', 404413);
+    const row = db.prepare("SELECT tcdb_set_id FROM card_sets WHERE id = ?").get(set.lastInsertRowid);
+    assert.strictEqual(row.tcdb_set_id, 404413);
+  });
+});
