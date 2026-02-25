@@ -65,36 +65,19 @@ class TcdbService {
     };
 
     try {
-      // Step 1: Run the scraper to build catalog DB
-      const args = ['--set-id', String(setId), '--no-images', '--json', '--output-dir', this.outputDir];
-      if (year) args.push('--year', String(year));
-      const scrapeResult = await this._runScraperRaw(args);
-
-      // Step 2: Merge catalog into user DB (skip if scraper found nothing)
-      this._status.phase = 'merging';
-      this._status.progress = { current: 2, total: 3, currentItem: 'Merging into CardVoice...' };
-
-      let mergeResult = null;
-      const totalScraped = (scrapeResult?.total_cards || 0) + (scrapeResult?.base_cards || 0);
-      if (totalScraped === 0) {
-        mergeResult = { skipped: true, reason: 'TCDB has no cards for this set yet' };
-      } else if (this.db) {
-        const { mergeCatalog } = require('./catalog-merge');
-        const catalogPath = path.join(this.outputDir, 'tcdb-catalog.db');
-        mergeResult = mergeCatalog(this.db, { catalogPath, force: true });
-      }
+      const result = await this._importSetInternal(setId, year);
 
       // Step 3: Done
       this._status = {
         running: false,
         phase: 'done',
         progress: { current: 3, total: 3, currentItem: 'Complete' },
-        result: { scrape: scrapeResult, merge: mergeResult },
+        result: result,
         error: null,
         startedAt: this._status.startedAt,
       };
 
-      return this._status.result;
+      return result;
     } catch (err) {
       this._status = {
         running: false,
@@ -106,6 +89,28 @@ class TcdbService {
       };
       throw err;
     }
+  }
+
+  /**
+   * Internal: scrape + merge a single set. Does NOT touch _status or _log.
+   * Used by both importSet() (which manages status) and backfillChecklists().
+   */
+  async _importSetInternal(setId, year) {
+    const args = ['--set-id', String(setId), '--no-images', '--json', '--output-dir', this.outputDir];
+    if (year) args.push('--year', String(year));
+    const scrapeResult = await this._runScraperRaw(args);
+
+    let mergeResult = null;
+    const totalScraped = (scrapeResult?.total_cards || 0) + (scrapeResult?.base_cards || 0);
+    if (totalScraped === 0) {
+      mergeResult = { skipped: true, reason: 'TCDB has no cards for this set yet' };
+    } else if (this.db) {
+      const { mergeCatalog } = require('./catalog-merge');
+      const catalogPath = path.join(this.outputDir, 'tcdb-catalog.db');
+      mergeResult = mergeCatalog(this.db, { catalogPath, force: true });
+    }
+
+    return { scrape: scrapeResult, merge: mergeResult };
   }
 
   /**
@@ -385,10 +390,11 @@ class TcdbService {
       this._status.progress = { current: completed, total: setsToBackfill.length, currentItem: `${set.name} (${set.year})` };
       this._log.push(`[${completed + 1}/${setsToBackfill.length}] ${set.name} (${set.year})...`);
       try {
-        await this.importSet(set.tcdb_set_id, set.year);
+        const result = await this._importSetInternal(set.tcdb_set_id, set.year);
         this.db.prepare('UPDATE card_sets SET checklist_imported = 1 WHERE id = ?').run(set.id);
+        const cards = result?.scrape?.total_cards || result?.scrape?.base_cards || 0;
         completed++;
-        this._log.push(`  Done`);
+        this._log.push(`  Done — ${cards} cards`);
       } catch (err) {
         this._log.push(`  ERROR: ${err.message}`);
       }
