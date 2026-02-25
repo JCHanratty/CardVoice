@@ -397,3 +397,68 @@ def parse_collection_cards(html: str) -> list[dict]:
         )
 
     return cards
+
+
+def parse_collection_page(html: str) -> dict:
+    """Parse ViewCollectionMode.cfm — the flat collection page with all cards.
+
+    Each card row has class 'collection_row' and contains:
+    - Qty: <span class="badge bg-light text-dark">{qty}</span>
+    - Card link: /ViewCard.cfm/sid/{setId}/cid/{cardId}/{slug}
+    - Player name + suffix (RC, SP, etc.) in the 5th <td>
+
+    Returns dict with 'cards' list and 'total_records' count.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    cards = []
+
+    _VIEWCARD_COLL_RE = re.compile(r"/ViewCard\.cfm/sid/(\d+)/cid/(\d+)")
+
+    for tr in soup.find_all("tr", class_="collection_row"):
+        tds = tr.find_all("td")
+        if len(tds) < 5:
+            continue
+
+        # Qty from badge
+        badge = tds[0].find("span", class_="badge")
+        qty = int(badge.get_text(strip=True)) if badge else 1
+
+        # Card number and IDs from ViewCard link
+        card_link = tds[2].find("a", href=_VIEWCARD_COLL_RE)
+        if not card_link:
+            continue
+        card_number = card_link.get_text(strip=True)
+        href_match = _VIEWCARD_COLL_RE.search(card_link["href"])
+        tcdb_set_id = int(href_match.group(1))
+        tcdb_card_id = int(href_match.group(2))
+
+        # Player name from 5th td's first <a>, suffix from remaining text
+        player_td = tds[4]
+        player_link = player_td.find("a")
+        player = player_link.get_text(strip=True) if player_link else player_td.get_text(strip=True)
+
+        # RC/SP suffix: text after the </a> tag
+        rc_sp = ""
+        if player_link and player_link.next_sibling:
+            suffix_text = player_link.next_sibling
+            if isinstance(suffix_text, str):
+                rc_sp = suffix_text.strip()
+
+        cards.append({
+            "card_number": card_number,
+            "player": player,
+            "qty": qty,
+            "rc_sp": rc_sp,
+            "tcdb_set_id": tcdb_set_id,
+            "tcdb_card_id": tcdb_card_id,
+        })
+
+    # Total records
+    total_records = 0
+    em = soup.find("em", string=re.compile(r"\d+\s+record"))
+    if em:
+        m = re.search(r"(\d[\d,]*)", em.get_text())
+        if m:
+            total_records = int(m.group(1).replace(",", ""))
+
+    return {"cards": cards, "total_records": total_records}
