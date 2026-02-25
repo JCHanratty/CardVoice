@@ -1893,6 +1893,65 @@ function createRoutes(db) {
   });
 
   // ============================================================
+  // Cross-Set Player Search
+  // ============================================================
+
+  // GET /api/cards/by-player?name=... — find cards across all sets for a player
+  router.get('/api/cards/by-player', (req, res) => {
+    const { normalizePlayerName } = require('./player-match');
+    const name = normalizePlayerName(req.query.name || '');
+    if (!name) return res.json([]);
+    const cards = db.prepare(`
+      SELECT c.*, cs.name as set_name, cs.year as set_year
+      FROM cards c JOIN card_sets cs ON cs.id = c.set_id
+      WHERE LOWER(REPLACE(REPLACE(c.player, '.', ''), ',', '')) LIKE ?
+      ORDER BY cs.year DESC, c.card_number
+    `).all(`%${name}%`);
+    const meta = db.prepare('SELECT * FROM player_metadata WHERE player_name = ?').get(name);
+    for (const c of cards) {
+      c.player_tier = meta?.tier || null;
+      c.is_focus_player = meta?.is_focus ? true : false;
+    }
+    res.json(cards);
+  });
+
+  // GET /api/cards/focus-players — all cards for focus players
+  router.get('/api/cards/focus-players', (req, res) => {
+    const focusPlayers = db.prepare("SELECT player_name FROM player_metadata WHERE is_focus = 1").all();
+    if (focusPlayers.length === 0) return res.json([]);
+    const allCards = [];
+    for (const fp of focusPlayers) {
+      const cards = db.prepare(`
+        SELECT c.*, cs.name as set_name, cs.year as set_year
+        FROM cards c JOIN card_sets cs ON cs.id = c.set_id
+        WHERE LOWER(REPLACE(REPLACE(c.player, '.', ''), ',', '')) LIKE ?
+        AND c.qty > 0
+        ORDER BY cs.year DESC
+      `).all(`%${fp.player_name}%`);
+      for (const c of cards) { c.player_tier = 'focus'; c.is_focus_player = true; }
+      allCards.push(...cards);
+    }
+    res.json(allCards);
+  });
+
+  // GET /api/cards/hof-rookies — HOF players with RC flag, owned
+  router.get('/api/cards/hof-rookies', (req, res) => {
+    const hofPlayers = db.prepare("SELECT player_name FROM player_metadata WHERE tier = 'hof'").all();
+    const rookies = [];
+    for (const hp of hofPlayers) {
+      const cards = db.prepare(`
+        SELECT c.*, cs.name as set_name, cs.year as set_year
+        FROM cards c JOIN card_sets cs ON cs.id = c.set_id
+        WHERE LOWER(REPLACE(REPLACE(c.player, '.', ''), ',', '')) LIKE ?
+        AND c.rc_sp LIKE '%RC%' AND c.qty > 0
+      `).all(`%${hp.player_name}%`);
+      for (const c of cards) { c.player_tier = 'hof'; c.is_focus_player = false; }
+      rookies.push(...cards);
+    }
+    res.json(rookies);
+  });
+
+  // ============================================================
   // TCDB Admin Endpoints
   // ============================================================
 

@@ -950,3 +950,39 @@ describe('TCDB Collection Import API', () => {
     assert.ok(data.cookie.includes('***')); // masked
   });
 });
+
+
+// ============================================================
+// Cross-Set Player Search
+// ============================================================
+describe('Cross-Set Player Search', () => {
+  it('GET /api/cards/by-player?name=... finds cards across sets', async () => {
+    const set1 = (await api('POST', '/api/sets', { name: 'XSetA', year: 2024, sport: 'Baseball', brand: 'Topps' })).data;
+    const set2 = (await api('POST', '/api/sets', { name: 'XSetB', year: 2025, sport: 'Baseball', brand: 'Topps' })).data;
+    await api('POST', `/api/sets/${set1.id}/cards`, { cards: [{ card_number: '1', player: 'Hank Aaron', qty: 1 }] });
+    await api('POST', `/api/sets/${set2.id}/cards`, { cards: [{ card_number: '50', player: 'Hank Aaron', qty: 2 }] });
+
+    const { data } = await api('GET', '/api/cards/by-player?name=hank%20aaron');
+    assert.ok(data.length >= 2);
+    assert.ok(data.some(c => c.set_name === 'XSetA'));
+    assert.ok(data.some(c => c.set_name === 'XSetB'));
+  });
+
+  it('GET /api/cards/focus-players returns all focus player cards', async () => {
+    db.prepare("UPDATE player_metadata SET is_focus = 1 WHERE player_name = 'hank aaron'").run();
+    const { data } = await api('GET', '/api/cards/focus-players');
+    assert.ok(data.length >= 1);
+    assert.ok(data.every(c => c.is_focus_player === true));
+  });
+
+  it('GET /api/cards/hof-rookies returns HOF cards with RC flag', async () => {
+    const set = (await api('POST', '/api/sets', { name: 'RCTestSet', year: 2025, sport: 'Baseball', brand: 'Topps' })).data;
+    await api('POST', `/api/sets/${set.id}/cards`, { cards: [
+      { card_number: '1', player: 'Hank Aaron', rc_sp: 'RC', qty: 1 },
+      { card_number: '2', player: 'Hank Aaron', qty: 1 },
+    ]});
+    const { data } = await api('GET', '/api/cards/hof-rookies');
+    assert.ok(data.length >= 1);
+    assert.ok(data.every(c => c.rc_sp && c.rc_sp.includes('RC')));
+  });
+});
