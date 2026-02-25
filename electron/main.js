@@ -148,14 +148,20 @@ function setupAutoUpdater() {
 }
 
 /**
- * CPR-Tracker-style quit-and-install:
- * 1. Write a .bat script that waits for our PID to die
- * 2. .bat runs the NSIS installer silently (/S --updated)
- * 3. Spawn .bat via invisible VBScript wrapper
- * 4. Hard-exit with app.exit(0)
+ * Quit-and-install: spawn the NSIS installer directly from Node.js
+ * as a fully detached process, then hard-exit.
  *
- * The NSIS installer handles relaunching the app after install
- * (runAfterFinish: true in package.json nsis config).
+ * Previous approach used .bat/.vbs wrappers, but NSIS silently failed
+ * (exit code 1) when launched from an invisible VBScript session —
+ * it nuked the old install then crashed, leaving nothing.
+ *
+ * This approach works because:
+ * 1. Node.js spawn() inherits our desktop session, giving NSIS the
+ *    interactive context it needs
+ * 2. NSIS --updated flag tells the installer to wait for the old app
+ *    to exit before proceeding
+ * 3. detached + unref() lets the installer outlive our process
+ * 4. runAfterFinish: true in nsis config relaunches the app after install
  */
 function findDownloadedInstaller() {
   // 1. Use the path from electron-updater if available
@@ -163,8 +169,9 @@ function findDownloadedInstaller() {
     return downloadedInstallerPath;
   }
 
-  // 2. Search the electron-updater cache directory for .exe files
-  const cacheDir = path.join(app.getPath('userData'), '..', 'cardvoice-updater', 'pending');
+  // 2. Search the electron-updater cache in LOCALAPPDATA
+  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local');
+  const cacheDir = path.join(localAppData, 'cardvoice-updater', 'pending');
   console.log('[Update] Searching updater cache:', cacheDir);
   try {
     if (fs.existsSync(cacheDir)) {
@@ -179,6 +186,19 @@ function findDownloadedInstaller() {
     console.error('[Update] Cache search failed:', e.message);
   }
 
+  // 3. Fallback: check ROAMING path (older electron-updater versions)
+  const roamingCache = path.join(app.getPath('userData'), '..', 'cardvoice-updater', 'pending');
+  try {
+    if (fs.existsSync(roamingCache)) {
+      const files = fs.readdirSync(roamingCache).filter(f => f.endsWith('.exe') && !f.startsWith('temp-'));
+      if (files.length > 0) {
+        const found = path.join(roamingCache, files[0]);
+        console.log('[Update] Found installer in roaming cache:', found);
+        return found;
+      }
+    }
+  } catch (e) {}
+
   return null;
 }
 
@@ -186,91 +206,41 @@ function quitAndInstallViaScript() {
   const installerPath = findDownloadedInstaller();
   if (!installerPath) {
     console.error('[Update] No downloaded installer found. downloadedInstallerPath was:', downloadedInstallerPath);
-    // Last resort fallback — try the broken quitAndInstall
+    // Last resort fallback
     autoUpdater.quitAndInstall(true, true);
     setTimeout(() => app.exit(0), 3000);
     return;
   }
 
-  const pid = process.pid;
-  const updatesDir = path.join(app.getPath('temp'), 'cardvoice-update');
-  fs.mkdirSync(updatesDir, { recursive: true });
+  console.log('[Update] Spawning installer directly:', installerPath);
+  console.log('[Update] PID:', process.pid);
 
-  const batPath = path.join(updatesDir, 'update.bat');
-  const vbsPath = path.join(updatesDir, 'update.vbs');
-  const logPath = path.join(updatesDir, 'update.log');
-
-  // Windows paths need backslashes in bat scripts
-  const installerWin = installerPath.replace(/\//g, '\\');
-  const logWin = logPath.replace(/\//g, '\\');
-
-  const batScript = `@echo off
-set "INSTALLER=${installerWin}"
-set "LOG=${logWin}"
-set "OLD_PID=${pid}"
-
-echo [%date% %time%] CardVoice update script started >> "%LOG%"
-echo [%date% %time%] Waiting for PID %OLD_PID% to exit... >> "%LOG%"
-
-REM Wait for old process to exit (up to 30 seconds)
-set /a TRIES=0
-:waitloop
-tasklist /FI "PID eq %OLD_PID%" 2>nul | find /i "%OLD_PID%" >nul 2>&1
-if errorlevel 1 goto done_waiting
-if %TRIES% GEQ 30 goto done_waiting
-timeout /t 1 /nobreak >nul
-set /a TRIES+=1
-goto waitloop
-:done_waiting
-
-timeout /t 2 /nobreak >nul
-echo [%date% %time%] Process exited, running installer >> "%LOG%"
-
-REM Run the NSIS installer silently with --updated flag
-echo [%date% %time%] Running: "%INSTALLER%" /S --updated >> "%LOG%"
-"%INSTALLER%" /S --updated
-
-echo [%date% %time%] Installer finished (exit code: %ERRORLEVEL%) >> "%LOG%"
-`;
-
-  // VBScript runs the bat completely invisible (no terminal flash)
-  const batPathEscaped = batPath.replace(/\\/g, '\\\\');
-  const vbsScript = `CreateObject("Wscript.Shell").Run "cmd /c """"${batPathEscaped}""""", 0, False\n`;
-
-  fs.writeFileSync(batPath, batScript, 'utf-8');
-  fs.writeFileSync(vbsPath, vbsScript, 'utf-8');
-
-  console.log('[Update] Spawning update script:', vbsPath);
-  console.log('[Update] Installer path:', installerPath);
-  console.log('[Update] PID to watch:', pid);
-
-  // Spawn the invisible VBScript wrapper (fully detached)
-  const child = spawn('wscript', ['//B', vbsPath], {
+  // Spawn the NSIS installer as a fully detached process.
+  // /S = silent, --updated = tells NSIS to wait for old app to exit.
+  const child = spawn(installerPath, ['/S', '--updated'], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
   });
   child.unref();
 
-  // Close server/DB before exiting — non-blocking with hard timeout
-  // The bat script waits for us to die, so we MUST exit quickly
+  // Close server/DB before exiting
   if (serverHandle) {
     try { serverHandle.server.close(); } catch (e) {}
     try { serverHandle.db.close(); } catch (e) {}
     serverHandle = null;
   }
 
-  // Hard exit — os-level, no event handlers, guaranteed termination.
-  // The bat script is already running detached and will wait for us to die.
-  // Use process.exit as fallback in case app.exit gets blocked by event handlers
+  // Hard exit so the installer can proceed.
+  // app.exit(0) first, process.exit(0) as fallback.
   setTimeout(() => {
     console.log('[Update] Hard exiting for update...');
     app.exit(0);
-  }, 300);
+  }, 500);
   setTimeout(() => {
     console.log('[Update] Force exiting (app.exit failed)...');
     process.exit(0);
-  }, 2000);
+  }, 3000);
 }
 
 // ============================================================
