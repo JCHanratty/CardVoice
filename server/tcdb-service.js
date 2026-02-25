@@ -184,8 +184,8 @@ class TcdbService {
     this._log = [];
     this._status = {
       running: true,
-      phase: 'collection-import',
-      progress: { current: 0, total: 3, currentItem: 'Scraping collection pages...' },
+      phase: 'collection-scrape',
+      progress: { current: 0, total: 0, currentItem: 'Starting collection scraper...' },
       result: null,
       error: null,
       startedAt: Date.now(),
@@ -193,16 +193,12 @@ class TcdbService {
 
     try {
       // Step 1: Run collection scraper
-      const scriptPath = path.join(this.scraperDir, 'collection_scraper.py');
-      const args = [
-        scriptPath, '--cookie', cookie, '--member', member,
-        '--json', '--output-dir', this.outputDir,
-      ];
-      const scrapeResult = await this._runScraperRaw(args);
+      const scrapeResult = await this._runCollectionScraper(cookie, member);
 
       // Step 2: Import into CardVoice DB
-      this._status.phase = 'importing';
-      this._status.progress = { current: 1, total: 3, currentItem: 'Importing cards into CardVoice...' };
+      this._status.phase = 'collection-import';
+      this._status.progress = { current: 0, total: scrapeResult?.total_cards || 0, currentItem: 'Importing cards into CardVoice...' };
+      this._log.push(`Importing ${scrapeResult?.total_cards || 0} cards across ${scrapeResult?.total_sets || 0} sets...`);
 
       const importResult = this._importCollectionData(scrapeResult);
 
@@ -210,11 +206,12 @@ class TcdbService {
       this._status = {
         running: false,
         phase: 'done',
-        progress: { current: 3, total: 3, currentItem: 'Complete' },
+        progress: { current: importResult.cards_added + importResult.cards_updated, total: scrapeResult?.total_cards || 0, currentItem: 'Complete' },
         result: { scrape: scrapeResult, import: importResult },
         error: null,
         startedAt: this._status.startedAt,
       };
+      this._log.push(`Done! ${importResult.sets_created} sets created, ${importResult.sets_matched} matched, ${importResult.cards_added} cards added, ${importResult.cards_updated} updated`);
 
       return this._status.result;
     } catch (err) {
@@ -224,6 +221,66 @@ class TcdbService {
       };
       throw err;
     }
+  }
+
+  /**
+   * Low-level: spawn collection_scraper.py with args, return parsed JSON from stdout.
+   * Separate from _runScraperRaw because it uses a different script.
+   */
+  _runCollectionScraper(cookie, member) {
+    return new Promise((resolve, reject) => {
+      const scriptPath = path.join(this.scraperDir, 'collection_scraper.py');
+      const args = [scriptPath, '--cookie', cookie, '--member', member, '--json', '--output-dir', this.outputDir];
+      const proc = spawn(this.python, args, {
+        cwd: this.scraperDir,
+        env: { ...process.env },
+        shell: true,
+      });
+      this._process = proc;
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => { stdout += data.toString(); });
+      proc.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        const lines = chunk.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          this._log.push(line.trim());
+          if (this._log.length > 100) this._log.shift();
+          // Parse page progress from log lines like "Page 5/71: 100 cards (total: 500)"
+          const pageMatch = line.match(/Page (\d+)\/(\d+)/);
+          if (pageMatch && this._status.running) {
+            this._status.progress = {
+              current: parseInt(pageMatch[1]),
+              total: parseInt(pageMatch[2]),
+              currentItem: line.trim(),
+            };
+          } else if (this._status.running && this._status.progress) {
+            this._status.progress.currentItem = line.trim();
+          }
+        }
+      });
+
+      proc.on('close', (code) => {
+        this._process = null;
+        if (code !== 0) {
+          return reject(new Error(`Collection scraper exited with code ${code}: ${stderr.slice(0, 500)}`));
+        }
+        try {
+          const result = JSON.parse(stdout);
+          resolve(result);
+        } catch (e) {
+          reject(new Error(`Failed to parse collection scraper output: ${e.message}\nstdout: ${stdout.slice(0, 500)}`));
+        }
+      });
+
+      proc.on('error', (err) => {
+        this._process = null;
+        reject(new Error(`Failed to spawn collection scraper: ${err.message}`));
+      });
+    });
   }
 
   /**

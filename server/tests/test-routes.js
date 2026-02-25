@@ -7,12 +7,14 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const { openDb } = require('../db');
 const { createRoutes } = require('../routes');
+const { TcdbService } = require('../tcdb-service');
 
 // Helper: make requests against the Express app without starting a real server
 function makeApp() {
   const db = openDb(':memory:');
   const app = express();
   app.use(express.json());
+  app.locals.tcdbService = new TcdbService({ db });
   app.use(createRoutes(db));
   return { app, db };
 }
@@ -948,6 +950,41 @@ describe('TCDB Collection Import API', () => {
     const { data } = await api('GET', '/api/settings/tcdb-cookie');
     assert.ok(data.cookie);
     assert.ok(data.cookie.includes('***')); // masked
+  });
+
+  it('POST /api/admin/tcdb/collection/import-json imports data directly', async () => {
+    const jsonData = {
+      total_cards: 2,
+      total_sets: 1,
+      sets: [{
+        tcdb_set_id: 99999,
+        set_name: 'JSON Import Test Set',
+        year: 2025,
+        card_count: 2,
+        cards: [
+          { card_number: '1', player: 'Test Player A', qty: 1, rc_sp: '', tcdb_set_id: 99999, tcdb_card_id: 1 },
+          { card_number: '2', player: 'Test Player B', qty: 3, rc_sp: 'RC', tcdb_set_id: 99999, tcdb_card_id: 2 },
+        ]
+      }]
+    };
+    const { status, data } = await api('POST', '/api/admin/tcdb/collection/import-json', { data: jsonData });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(data.sets_created, 1);
+    assert.strictEqual(data.cards_added, 2);
+    // Verify set was created
+    const setRow = db.prepare("SELECT * FROM card_sets WHERE tcdb_set_id = 99999").get();
+    assert.ok(setRow);
+    assert.strictEqual(setRow.name, 'JSON Import Test Set');
+    // Verify cards exist
+    const cards = db.prepare("SELECT * FROM cards WHERE set_id = ?").all(setRow.id);
+    assert.strictEqual(cards.length, 2);
+    assert.ok(cards.some(c => c.player === 'Test Player A'));
+    assert.ok(cards.some(c => c.player === 'Test Player B' && c.qty === 3));
+  });
+
+  it('POST /api/admin/tcdb/collection/import-json returns 400 for invalid data', async () => {
+    const { status } = await api('POST', '/api/admin/tcdb/collection/import-json', { data: { invalid: true } });
+    assert.strictEqual(status, 400);
   });
 });
 

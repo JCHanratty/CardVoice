@@ -79,6 +79,20 @@ function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false; // We handle install ourselves
   autoUpdater.disableDifferentialDownload = true;
+  autoUpdater.allowPrerelease = false;
+  // Ensure we only look at published (non-draft) releases
+  autoUpdater.allowDowngrade = false;
+
+  autoUpdater.on('checking-for-update', () => {
+    console.log('[Update] Checking for updates...');
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    console.log('[Update] No update available. Current:', app.getVersion(), 'Latest:', info?.version);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-not-available', info);
+    }
+  });
 
   autoUpdater.on('update-available', (info) => {
     console.log('[Update] Update available:', info.version);
@@ -108,9 +122,18 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('error', (err) => {
+    // Provide a user-friendly error message
+    let userMessage = err.message;
+    if (err.message.includes('net::ERR') || err.message.includes('ENOTFOUND')) {
+      userMessage = 'No internet connection. Check your network and try again.';
+    } else if (err.message.includes('404') || err.message.includes('No published versions')) {
+      userMessage = 'No installer available for this release. The developer needs to upload build artifacts.';
+    } else if (err.message.includes('SHA512') || err.message.includes('checksum')) {
+      userMessage = 'Download corrupted. Try again.';
+    }
     console.error('[Update] Auto-update error:', err.message);
     if (mainWindow) {
-      mainWindow.webContents.send('update-error', { message: err.message });
+      mainWindow.webContents.send('update-error', { message: userMessage, detail: err.message });
     }
   });
 
@@ -229,7 +252,8 @@ echo [%date% %time%] Installer finished (exit code: %ERRORLEVEL%) >> "%LOG%"
   });
   child.unref();
 
-  // Close server/DB before exiting
+  // Close server/DB before exiting — non-blocking with hard timeout
+  // The bat script waits for us to die, so we MUST exit quickly
   if (serverHandle) {
     try { serverHandle.server.close(); } catch (e) {}
     try { serverHandle.db.close(); } catch (e) {}
@@ -238,10 +262,15 @@ echo [%date% %time%] Installer finished (exit code: %ERRORLEVEL%) >> "%LOG%"
 
   // Hard exit — os-level, no event handlers, guaranteed termination.
   // The bat script is already running detached and will wait for us to die.
+  // Use process.exit as fallback in case app.exit gets blocked by event handlers
   setTimeout(() => {
     console.log('[Update] Hard exiting for update...');
     app.exit(0);
-  }, 500);
+  }, 300);
+  setTimeout(() => {
+    console.log('[Update] Force exiting (app.exit failed)...');
+    process.exit(0);
+  }, 2000);
 }
 
 // ============================================================
@@ -459,19 +488,19 @@ app.whenReady().then(() => {
   }
 });
 
-app.on('window-all-closed', () => {
+function shutdownServer() {
   if (serverHandle) {
     try { serverHandle.server.close(); } catch (e) {}
     try { serverHandle.db.close(); } catch (e) {}
     serverHandle = null;
   }
+}
+
+app.on('window-all-closed', () => {
+  shutdownServer();
   app.quit();
 });
 
 app.on('before-quit', () => {
-  if (serverHandle) {
-    try { serverHandle.server.close(); } catch (e) {}
-    try { serverHandle.db.close(); } catch (e) {}
-    serverHandle = null;
-  }
+  shutdownServer();
 });

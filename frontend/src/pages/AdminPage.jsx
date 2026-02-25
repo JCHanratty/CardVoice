@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Shield, Search, Download, RefreshCw, ChevronRight, CheckCircle, XCircle } from 'lucide-react';
+import { Shield, Search, Download, RefreshCw, ChevronRight, CheckCircle, XCircle, Upload } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -50,6 +50,10 @@ export default function AdminPage() {
     setUpdateMsg('');
 
     // Listen for download events so the Admin page can show real status
+    window.electronAPI.onUpdateNotAvailable?.(() => {
+      setUpdateMsg('You are on the latest version');
+      setUpdateChecking(false);
+    });
     window.electronAPI.onDownloadProgress?.((progress) => {
       setUpdateMsg(`Downloading update... ${progress.percent}%`);
     });
@@ -59,7 +63,7 @@ export default function AdminPage() {
       setUpdateDownloaded(true);
     });
     window.electronAPI.onUpdateError?.((err) => {
-      setUpdateMsg(`Update failed: ${err.message}`);
+      setUpdateMsg(`Update error: ${err.message}`);
       setUpdateChecking(false);
     });
 
@@ -70,10 +74,8 @@ export default function AdminPage() {
         setUpdateChecking(false);
       } else if (result.version) {
         setUpdateMsg(`Update v${result.version} found — downloading...`);
-      } else {
-        setUpdateMsg('You are on the latest version');
-        setUpdateChecking(false);
       }
+      // Don't set "latest version" here — wait for the update-not-available event
     } catch (err) {
       setUpdateMsg(err.message || 'Failed to check for updates');
       setUpdateChecking(false);
@@ -162,19 +164,91 @@ export default function AdminPage() {
     }
   };
 
+  const [showCollectionModal, setShowCollectionModal] = useState(false);
+  const [collectionLog, setCollectionLog] = useState([]);
+  const collectionLogEndRef = useRef(null);
+  const [collectionProgress, setCollectionProgress] = useState(null);
+  const [collectionPhase, setCollectionPhase] = useState('');
+  const [collectionStartedAt, setCollectionStartedAt] = useState(null);
+  const [showJsonImport, setShowJsonImport] = useState(false);
+  const [jsonImportData, setJsonImportData] = useState('');
+  const [jsonImportStatus, setJsonImportStatus] = useState('');
+
   const startCollectionImport = async () => {
     setCollectionImporting(true);
     setCollectionStatus('Starting collection import...');
     setCollectionResult(null);
+    setCollectionLog([]);
+    setCollectionProgress(null);
+    setCollectionPhase('starting');
+    setCollectionStartedAt(Date.now());
+    setShowCollectionModal(true);
     try {
-      const res = await axios.post(`${API}/api/admin/tcdb/collection/import`, { member: tcdbMember });
-      setCollectionResult(res.data?.import || res.data);
-      setCollectionStatus('Done!');
+      await axios.post(`${API}/api/admin/tcdb/collection/import`, { member: tcdbMember });
+      // Poll status
+      const interval = setInterval(async () => {
+        try {
+          const res = await axios.get(`${API}/api/admin/tcdb/status`);
+          const s = res.data;
+          setCollectionLog(s.log || []);
+          setCollectionProgress(s.progress);
+          setCollectionPhase(s.phase || 'idle');
+          if (!s.running && s.phase !== 'idle') {
+            clearInterval(interval);
+            setCollectionImporting(false);
+            if (s.phase === 'done') {
+              setCollectionResult(s.result?.import || s.result);
+              setCollectionStatus('Done!');
+            } else if (s.phase === 'error') {
+              setCollectionStatus(`Error: ${s.error}`);
+            }
+          }
+        } catch (e) {
+          clearInterval(interval);
+          setCollectionImporting(false);
+        }
+      }, 1000);
     } catch (err) {
       setCollectionStatus(`Error: ${err.response?.data?.error || err.message}`);
-    } finally {
       setCollectionImporting(false);
     }
+  };
+
+  const cancelCollection = async () => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/cancel`);
+    } catch (e) { /* ignore */ }
+  };
+
+  const submitJsonImport = async (jsonString) => {
+    const data = jsonString || jsonImportData;
+    setJsonImportStatus('Importing...');
+    try {
+      const parsed = JSON.parse(data);
+      const res = await axios.post(`${API}/api/admin/tcdb/collection/import-json`, { data: parsed });
+      setCollectionResult(res.data);
+      setJsonImportStatus('Import complete!');
+      setJsonImportData('');
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        setJsonImportStatus('Invalid JSON. Please check the format.');
+      } else {
+        setJsonImportStatus(`Error: ${err.response?.data?.error || err.message}`);
+      }
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const content = ev.target.result;
+      setJsonImportData(content);
+      submitJsonImport(content);
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // reset input
   };
 
   const startBackfill = async () => {
@@ -201,6 +275,12 @@ export default function AdminPage() {
       logEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [importStatus?.log]);
+
+  useEffect(() => {
+    if (collectionLogEndRef.current) {
+      collectionLogEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [collectionLog]);
 
   const filteredSets = sets.filter(s =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -270,7 +350,7 @@ export default function AdminPage() {
       <div className="bg-cv-panel rounded-xl border border-cv-border p-4 mb-4">
         <h3 className="text-sm font-semibold text-cv-text mb-3">Import TCDB Collection</h3>
         <p className="text-xs text-cv-muted mb-3">
-          Import your entire TCDB collection into CardVoice. This will scrape all your collection pages and create sets and cards.
+          Import your entire TCDB collection into CardVoice. Enter your TCDB username and click Import, or paste JSON data from the browser console scraper.
         </p>
         <div className="flex gap-2 items-end">
           <div className="flex-1">
@@ -283,13 +363,32 @@ export default function AdminPage() {
             className="px-4 py-2 rounded-lg text-sm bg-gradient-to-r from-cv-accent to-cv-accent2 text-white font-medium disabled:opacity-50 hover:opacity-90">
             {collectionImporting ? 'Importing...' : 'Import My Collection'}
           </button>
+          <button onClick={() => setShowJsonImport(!showJsonImport)}
+            className="px-4 py-2 rounded-lg text-sm bg-cv-accent/20 text-cv-accent font-medium hover:bg-cv-accent/30">
+            Paste JSON
+          </button>
         </div>
-        {collectionImporting && (
+        {showJsonImport && (
           <div className="mt-3 bg-cv-dark rounded-lg p-3 border border-cv-border">
-            <div className="text-xs text-cv-muted">{collectionStatus}</div>
+            <label className="text-xs text-cv-muted block mb-1">Paste JSON from browser console scraper, or upload a JSON file</label>
+            <textarea value={jsonImportData} onChange={e => setJsonImportData(e.target.value)}
+              placeholder='{"total_cards": 100, "total_sets": 5, "sets": [...]}'
+              rows={6}
+              className="w-full bg-cv-dark border border-cv-border rounded-lg px-3 py-2 text-xs text-cv-text font-mono focus:border-cv-accent focus:outline-none resize-y" />
+            <div className="flex items-center gap-2 mt-2">
+              <button onClick={() => submitJsonImport()} disabled={!jsonImportData.trim()}
+                className="px-4 py-2 rounded-lg text-sm bg-gradient-to-r from-cv-accent to-cv-accent2 text-white font-medium disabled:opacity-50 hover:opacity-90">
+                Import JSON
+              </button>
+              <label className="px-4 py-2 rounded-lg text-sm bg-cv-accent/20 text-cv-accent font-medium hover:bg-cv-accent/30 cursor-pointer flex items-center gap-1">
+                <Upload size={14} /> Upload File
+                <input type="file" accept=".json" onChange={handleFileUpload} className="hidden" />
+              </label>
+              {jsonImportStatus && <span className="text-xs text-cv-muted">{jsonImportStatus}</span>}
+            </div>
           </div>
         )}
-        {collectionResult && (
+        {collectionResult && !showCollectionModal && (
           <div className="mt-3 bg-cv-accent/10 border border-cv-accent/30 rounded-lg p-3">
             <div className="text-sm text-cv-accent font-semibold">Import Complete!</div>
             <div className="text-xs text-cv-muted mt-1">
@@ -298,6 +397,98 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+
+      {/* Collection Import Progress Modal */}
+      {showCollectionModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-cv-panel border border-cv-border rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl">
+            <h2 className="text-lg font-display font-bold text-cv-text mb-1">
+              Collection Import
+            </h2>
+
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-xs font-semibold uppercase tracking-wider text-cv-accent">
+                {collectionPhase === 'collection-scrape' && 'Scraping TCDB pages...'}
+                {collectionPhase === 'collection-import' && 'Importing into CardVoice...'}
+                {collectionPhase === 'done' && 'Import Complete'}
+                {collectionPhase === 'error' && 'Import Failed'}
+                {(collectionPhase === 'starting' || collectionPhase === 'idle') && 'Starting...'}
+              </span>
+              <span className="text-xs text-cv-muted font-mono">
+                {formatElapsed(collectionStartedAt)}
+              </span>
+            </div>
+
+            {collectionProgress?.total > 0 && (
+              <div className="w-full h-1.5 bg-cv-border/50 rounded-full mb-2 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min(100, Math.round((collectionProgress.current / collectionProgress.total) * 100))}%` }}
+                />
+              </div>
+            )}
+            {collectionProgress && (
+              <div className="text-xs text-cv-muted mb-3 truncate">
+                {collectionProgress.currentItem || `${collectionProgress.current}/${collectionProgress.total}`}
+              </div>
+            )}
+
+            <div className="bg-cv-dark/80 rounded-lg border border-cv-border/30 p-3 h-48 overflow-y-auto font-mono text-[11px] leading-relaxed text-cv-muted mb-4">
+              {collectionLog.length > 0 ? (
+                collectionLog.map((line, i) => (
+                  <div key={i} className={i === collectionLog.length - 1 ? 'text-cv-text' : ''}>{line}</div>
+                ))
+              ) : (
+                <div className="text-cv-muted/50">Waiting for scraper output...</div>
+              )}
+              <div ref={collectionLogEndRef} />
+            </div>
+
+            {collectionPhase === 'error' && (
+              <div className="mb-4 p-3 rounded-lg bg-red-900/20 border border-red-500/30 text-red-400 text-sm">
+                {collectionStatus}
+              </div>
+            )}
+
+            {collectionPhase === 'done' && collectionResult && (
+              <div className="mb-4 p-3 rounded-lg bg-green-900/20 border border-green-500/30">
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle size={16} className="text-green-400" />
+                  <span className="text-sm font-semibold text-green-400">Import Complete</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-xs">
+                  <span className="text-cv-muted">Sets created:</span>
+                  <span className="text-cv-text font-mono">{collectionResult.sets_created || collectionResult?.import?.sets_created || 0}</span>
+                  <span className="text-cv-muted">Sets matched:</span>
+                  <span className="text-cv-text font-mono">{collectionResult.sets_matched || collectionResult?.import?.sets_matched || 0}</span>
+                  <span className="text-cv-muted">Cards added:</span>
+                  <span className="text-cv-text font-mono">{collectionResult.cards_added || collectionResult?.import?.cards_added || 0}</span>
+                  <span className="text-cv-muted">Cards updated:</span>
+                  <span className="text-cv-text font-mono">{collectionResult.cards_updated || collectionResult?.import?.cards_updated || 0}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              {collectionImporting ? (
+                <button
+                  onClick={cancelCollection}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-all"
+                >
+                  Cancel Import
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowCollectionModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Checklist Backfill */}
       <div className="bg-cv-panel rounded-xl border border-cv-border p-4 mb-4">

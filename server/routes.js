@@ -2057,8 +2057,22 @@ function createRoutes(db) {
     if (!cookie) return res.status(400).json({ error: 'TCDB cookie not set. Go to Settings to add your session cookie.' });
     if (!member) return res.status(400).json({ error: 'TCDB member username required' });
     if (!req.app.locals.tcdbService) return res.status(500).json({ error: 'TCDB service not available' });
+    const tcdb = req.app.locals.tcdbService;
+    if (tcdb.getStatus().running) return res.json({ message: 'Import already running' });
+    // Fire and forget — frontend polls /api/admin/tcdb/status
+    tcdb.importCollection(cookie, member).catch(err => {
+      console.error('[TCDB] Collection import failed:', err.message);
+    });
+    res.json({ message: 'Collection import started' });
+  });
+
+  // POST /api/admin/tcdb/collection/import-json — direct JSON import (bypass Cloudflare)
+  router.post('/api/admin/tcdb/collection/import-json', async (req, res) => {
+    const { data } = req.body;
+    if (!data || !data.sets) return res.status(400).json({ error: 'Invalid data format. Expected { sets: [...] }' });
+    if (!req.app.locals.tcdbService) return res.status(500).json({ error: 'TCDB service not available' });
     try {
-      const result = await req.app.locals.tcdbService.importCollection(cookie, member);
+      const result = req.app.locals.tcdbService._importCollectionData(data);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
