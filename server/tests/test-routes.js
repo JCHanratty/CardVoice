@@ -801,3 +801,42 @@ describe('card_sets migrations', () => {
     assert.strictEqual(row.tcdb_set_id, 404413);
   });
 });
+
+describe('Player Name Normalization', () => {
+  it('normalizes Jr/Sr suffixes with word boundaries', () => {
+    const { normalizePlayerName } = require('../player-match');
+    assert.strictEqual(normalizePlayerName('Cal Ripken Jr.'), 'cal ripken');
+    assert.strictEqual(normalizePlayerName('Ken Griffey, Jr'), 'ken griffey');
+    assert.strictEqual(normalizePlayerName('Cal Ripken Sr.'), 'cal ripken');
+    assert.strictEqual(normalizePlayerName('Roberto Alomar II'), 'roberto alomar');
+  });
+
+  it('does not mangle names containing suffix substrings', () => {
+    const { normalizePlayerName } = require('../player-match');
+    assert.strictEqual(normalizePlayerName('William Smith'), 'william smith');
+    assert.strictEqual(normalizePlayerName('Kirby Puckett'), 'kirby puckett');
+  });
+
+  it('strips punctuation', () => {
+    const { normalizePlayerName } = require('../player-match');
+    assert.strictEqual(normalizePlayerName('Cal Ripken, Jr.'), 'cal ripken');
+    assert.strictEqual(normalizePlayerName("Shohei Ohtani"), 'shohei ohtani');
+  });
+});
+
+describe('Player Matching', () => {
+  it('matchPlayer finds HOF player', () => {
+    const { matchPlayer } = require('../player-match');
+    // Insert a test player first
+    db.prepare("INSERT OR IGNORE INTO player_metadata (player_name, tier) VALUES (?, ?)").run('hank aaron', 'hof');
+    const result = matchPlayer(db, 'Hank Aaron');
+    assert.ok(result);
+    assert.strictEqual(result.tier, 'hof');
+  });
+
+  it('matchPlayer returns null for unknown player', () => {
+    const { matchPlayer } = require('../player-match');
+    const result = matchPlayer(db, 'Random Nobody');
+    assert.strictEqual(result, null);
+  });
+});
