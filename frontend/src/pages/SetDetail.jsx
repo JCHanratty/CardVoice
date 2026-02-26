@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Trash2, Pencil, Check, X, Download, Search, Upload, Mic, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, CheckSquare, Square, Layers } from 'lucide-react';
 import axios from 'axios';
@@ -29,9 +29,8 @@ export default function SetDetail() {
   // Set metadata (insert types + parallels from checklist import)
   const [metadata, setMetadata] = useState({ insertTypes: [], parallels: [] });
   const [activeInsertType, setActiveInsertType] = useState('');
-  const [activeParallel, setActiveParallel] = useState('');
 
-  const [showAllParallels, setShowAllParallels] = useState(false);
+  const [expandedCard, setExpandedCard] = useState(null); // card_number string or null
 
   const [trackedCards, setTrackedCards] = useState({});
   const [setPrice, setSetPrice] = useState(null);
@@ -105,11 +104,6 @@ export default function SetDetail() {
       window.removeEventListener('menu-export-excel', handleExportExcel);
     };
   }, [setId]);
-
-  // Reset parallel selection when insert type changes
-  useEffect(() => {
-    setActiveParallel('');
-  }, [activeInsertType]);
 
   const deleteCard = async (cardId) => {
     if (!window.confirm('Delete this card?')) return;
@@ -247,16 +241,14 @@ export default function SetDetail() {
   // Bulk ownership: own all / clear all for current filter scope
   const bulkSetQty = async (qty) => {
     const scope = hasMetadata && activeInsertType ? activeInsertType : 'all cards';
-    const parallelScope = hasMetadata ? (activeParallel || 'Base') : '';
     const count = filtered.length;
 
     if (qty === 0 && !window.confirm(`Clear ownership for ${count} ${scope} cards? This sets qty to 0.`)) return;
-    if (qty === 1 && !window.confirm(`Mark all ${count} ${scope}${parallelScope ? ` / ${parallelScope}` : ''} cards as owned (qty=1)?`)) return;
+    if (qty === 1 && !window.confirm(`Mark all ${count} ${scope} cards as owned (qty=1)?`)) return;
 
     try {
       const payload = { qty };
       if (hasMetadata && activeInsertType) payload.insert_type = activeInsertType;
-      if (hasMetadata && activeParallel !== undefined) payload.parallel = activeParallel;
 
       const res = await axios.put(`${API}/api/sets/${setId}/bulk-qty`, payload);
       await loadSet();
@@ -290,63 +282,68 @@ export default function SetDetail() {
   const activeInsertTypeObj = metadata.insertTypes.find(t => t.name === activeInsertType);
   const availableParallels = activeInsertTypeObj?.parallels || [];
 
-  const cardNumSort = (cn) => {
-    const m = (cn || '').match(/(\d+)/);
-    return m ? parseInt(m[1], 10) : 0;
-  };
-
-  const filtered = cards.filter(c => {
+  // Filter by insert type and search only (parallels are inline per card)
+  const typeFiltered = cards.filter(c => {
     if (hasMetadata && activeInsertType) {
       if ((c.insert_type || 'Base') !== activeInsertType) return false;
     }
-    if (hasMetadata && activeParallel !== undefined) {
-      if ((c.parallel || '') !== activeParallel) return false;
-    }
-    if (filter === 'have' && (!c.qty || c.qty === 0)) return false;
-    if (filter === 'need' && c.qty > 0) return false;
     if (search) {
       const s = search.toLowerCase();
       return (
         (c.card_number || '').toLowerCase().includes(s) ||
         (c.player || '').toLowerCase().includes(s) ||
-        (c.team || '').toLowerCase().includes(s) ||
-        (c.insert_type || '').toLowerCase().includes(s) ||
-        (c.parallel || '').toLowerCase().includes(s)
+        (c.team || '').toLowerCase().includes(s)
       );
     }
     return true;
-  }).sort((a, b) => {
-    const itA = (a.insert_type || 'Base').toLowerCase();
-    const itB = (b.insert_type || 'Base').toLowerCase();
-    if (itA !== itB) return itA.localeCompare(itB);
-    const pA = (a.parallel || '').toLowerCase();
-    const pB = (b.parallel || '').toLowerCase();
-    if (pA !== pB) return pA.localeCompare(pB);
-    return cardNumSort(b.card_number) - cardNumSort(a.card_number);
   });
 
-  // Compute which parallel columns to show in the table
-  const ownedParallelNames = new Set();
-  filtered.forEach(c => c.owned_parallels?.forEach(op => ownedParallelNames.add(op.name)));
-  const parallelColumns = showAllParallels
-    ? availableParallels
-    : availableParallels.filter(p => ownedParallelNames.has(p.name));
+  // Group by card_number — merge all parallels into one row
+  const cardGroups = useMemo(() => {
+    const map = new Map();
+    typeFiltered.forEach(c => {
+      const key = c.card_number || String(c.id);
+      if (!map.has(key)) {
+        map.set(key, {
+          card_number: c.card_number,
+          player: c.player,
+          team: c.team,
+          is_rc: c.is_rc,
+          is_sp: c.is_sp,
+          rc_sp: c.rc_sp,
+          insert_type: c.insert_type,
+          player_tier: c.player_tier,
+          is_focus_player: c.is_focus_player,
+          totalQty: 0,
+          variants: [],
+          baseCard: null,
+        });
+      }
+      const group = map.get(key);
+      group.variants.push({ ...c, parallelName: c.parallel || 'Base' });
+      group.totalQty += (c.qty || 0);
+      if (!c.parallel || c.parallel === '') group.baseCard = c;
+    });
+    return [...map.values()];
+  }, [typeFiltered]);
+
+  // Apply have/need filter on grouped cards
+  const filtered = cardGroups.filter(g => {
+    if (filter === 'have' && g.totalQty === 0) return false;
+    if (filter === 'need' && g.totalQty > 0) return false;
+    return true;
+  }).sort((a, b) => {
+    const numA = parseInt((a.card_number || '0').match(/\d+/)?.[0] || '0');
+    const numB = parseInt((b.card_number || '0').match(/\d+/)?.[0] || '0');
+    return numA - numB;
+  });
 
   // Stats
-  const totalCards = cards.length;
-  const haveCount = cards.filter(c => c.qty > 0).length;
-  const totalQty = cards.reduce((s, c) => s + (c.qty || 0), 0);
-  const ownPct = totalCards > 0 ? Math.round((haveCount / totalCards) * 100) : 0;
-
-  // Group stats
-  const groupStats = {};
-  filtered.forEach(c => {
-    const key = `${c.insert_type || 'Base'}||${c.parallel || ''}`;
-    if (!groupStats[key]) groupStats[key] = { cards: 0, qty: 0, have: 0 };
-    groupStats[key].cards++;
-    groupStats[key].qty += (c.qty || 0);
-    if (c.qty > 0) groupStats[key].have++;
-  });
+  const totalCards = typeFiltered.length;
+  const baseCards = typeFiltered.filter(c => !c.parallel || c.parallel === '');
+  const haveCount = baseCards.filter(c => c.qty > 0).length;
+  const totalQty = typeFiltered.reduce((s, c) => s + (c.qty || 0), 0);
+  const ownPct = baseCards.length > 0 ? Math.round((haveCount / baseCards.length) * 100) : 0;
 
   // Export CSV
   const csvField = (val) => {
@@ -662,7 +659,7 @@ export default function SetDetail() {
         <div className="flex gap-3 mb-4">
           <div>
             <label className="text-xs text-cv-muted uppercase tracking-wider font-semibold block mb-1">Insert Type</label>
-            <select value={activeInsertType} onChange={e => { setActiveInsertType(e.target.value); setActiveParallel(''); }}
+            <select value={activeInsertType} onChange={e => setActiveInsertType(e.target.value)}
               className="bg-cv-panel border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text focus:border-cv-accent focus:outline-none min-w-[160px]">
               {metadata.insertTypes.map(t => {
                 const prefix = t.section_type && t.section_type !== 'base'
@@ -673,26 +670,6 @@ export default function SetDetail() {
               })}
             </select>
           </div>
-          <div>
-            <label className="text-xs text-cv-muted uppercase tracking-wider font-semibold block mb-1">Parallel</label>
-            <select value={activeParallel} onChange={e => setActiveParallel(e.target.value)}
-              className="bg-cv-panel border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text focus:border-cv-accent focus:outline-none min-w-[160px]">
-              <option value="">Base</option>
-              {availableParallels.map(p => (
-                <option key={p.id} value={p.name}>
-                  {p.name}{p.print_run ? ` /${p.print_run}` : ''}{p.exclusive ? ` (${p.exclusive})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-          {availableParallels.length > 0 && (
-            <div className="flex items-end">
-              <button onClick={() => setShowAllParallels(!showAllParallels)}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all">
-                {showAllParallels ? 'Show owned only' : `Rainbow (${availableParallels.length})`}
-              </button>
-            </div>
-          )}
         </div>
       )}
 
@@ -705,7 +682,7 @@ export default function SetDetail() {
               <span className="text-xs text-cv-muted uppercase tracking-wider font-semibold">Bulk Ownership</span>
               {hasMetadata && activeInsertType && (
                 <span className="text-xs bg-cv-accent/10 text-cv-accent border border-cv-accent/20 rounded px-2 py-0.5">
-                  {activeInsertType}{activeParallel ? ` / ${activeParallel}` : ''}
+                  {activeInsertType}
                 </span>
               )}
             </div>
@@ -732,33 +709,16 @@ export default function SetDetail() {
         </div>
       )}
 
-      {/* Totals Summary */}
+      {/* Stats Summary */}
       {filtered.length > 0 && (
         <div className="bg-cv-panel rounded-xl border border-cv-border/50 p-3 mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-cv-muted uppercase tracking-wider font-semibold">Filtered View</span>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-cv-muted uppercase tracking-wider font-semibold">Stats</span>
             <div className="flex items-center gap-4 text-sm">
-              <span className="text-cv-muted text-xs">Checklist <span className="text-cv-text font-mono font-bold">{filtered.length}</span></span>
-              <span className="text-cv-muted text-xs">Owned <span className="text-cv-accent font-mono font-bold">{filtered.filter(c => c.qty > 0).length}</span><span className="text-cv-muted font-mono">/{filtered.length}</span></span>
-              <span className="text-cv-muted text-xs">Copies <span className="text-cv-gold font-mono font-bold">{filtered.reduce((s, c) => s + (c.qty || 0), 0)}</span></span>
+              <span className="text-cv-muted text-xs">Checklist <span className="text-cv-text font-mono font-bold">{baseCards.length}</span></span>
+              <span className="text-cv-muted text-xs">Owned <span className="text-cv-accent font-mono font-bold">{haveCount}</span><span className="text-cv-muted font-mono">/{baseCards.length}</span></span>
+              <span className="text-cv-muted text-xs">Total Copies <span className="text-cv-gold font-mono font-bold">{totalQty}</span></span>
             </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(groupStats).map(([key, stats]) => {
-              const [insertType, parallel] = key.split('||');
-              return (
-                <div key={key} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-cv-dark/50 border border-cv-border/30 text-xs">
-                  <span className="text-cv-accent font-semibold">{insertType}</span>
-                  {parallel && <><span className="text-cv-muted">/</span><span className="text-cv-gold">{parallel}</span></>}
-                  {!parallel && <span className="text-cv-muted">-- base</span>}
-                  <span className="text-cv-muted">·</span>
-                  <span className="text-cv-text">{stats.have}<span className="text-cv-muted">/{stats.cards}</span> owned</span>
-                  <span className="text-cv-muted">·</span>
-                  <span className="text-cv-gold font-mono font-bold">{stats.qty}</span>
-                  <span className="text-cv-muted">copies</span>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
@@ -768,222 +728,162 @@ export default function SetDetail() {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-cv-dark/50 border-b border-cv-border/50">
-              <th className="text-center px-2 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-8">{'\u2605'}</th>
-              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Card #</th>
+              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-16">#</th>
               <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Player</th>
-              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Team</th>
-              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">RC/SP</th>
-              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Insert Type</th>
-              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Parallel</th>
-              <th className="text-center px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Qty</th>
-              {parallelColumns.map(p => (
-                <th key={p.id} className="text-center px-2 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold whitespace-nowrap">{p.name}</th>
-              ))}
-              <th className="text-center px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-20">Actions</th>
-              <th className="text-right px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold">Price</th>
+              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-24">Team</th>
+              <th className="text-left px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-20">RC/SP</th>
+              <th className="text-center px-3 py-2.5 text-xs text-cv-muted uppercase tracking-wider font-semibold w-16">Qty</th>
+              <th className="w-20"></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((card, idx) => {
-              const prev = idx > 0 ? filtered[idx - 1] : null;
-              const next = idx < filtered.length - 1 ? filtered[idx + 1] : null;
-              const newInsert = !prev || (prev.insert_type || 'Base') !== (card.insert_type || 'Base');
-              const newParallel = newInsert || (prev.parallel || '') !== (card.parallel || '');
-              const lastInGroup = !next
-                || (next.insert_type || 'Base') !== (card.insert_type || 'Base')
-                || (next.parallel || '') !== (card.parallel || '');
-              const groupKey = `${card.insert_type || 'Base'}||${card.parallel || ''}`;
-              const stats = groupStats[groupKey] || { cards: 0, qty: 0, have: 0 };
-              const allGroupOwned = stats.have === stats.cards && stats.cards > 0;
-              const groupHeader = newParallel ? (
-                <tr key={`grp-${idx}`} className="bg-cv-accent/[0.03]">
-                  <td colSpan={10 + parallelColumns.length} className="px-3 py-1.5 text-xs font-semibold">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-cv-accent">{card.insert_type || 'Base'}</span>
-                        {card.parallel && <><span className="text-cv-muted mx-1.5">/</span><span className="text-cv-gold">{card.parallel}</span></>}
-                        {!card.parallel && <span className="text-cv-muted ml-1.5">-- base</span>}
-                        <span className="text-cv-muted ml-2">({stats.have}/{stats.cards})</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => bulkSetGroupQty(card.insert_type || 'Base', card.parallel || '', allGroupOwned ? 0 : 1)}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
-                            allGroupOwned
-                              ? 'bg-cv-accent/15 text-cv-accent border border-cv-accent/25 hover:bg-cv-accent/25'
-                              : 'bg-white/5 text-cv-muted border border-cv-border/30 hover:text-cv-accent hover:border-cv-accent/30'
-                          }`}
-                          title={allGroupOwned ? 'Clear all in group' : 'Own all in group'}
-                        >
-                          {allGroupOwned ? <CheckSquare size={10} /> : <Square size={10} />}
-                          {allGroupOwned ? 'All Owned' : 'Own All'}
-                        </button>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              ) : null;
-              const groupFooter = lastInGroup ? (
-                <tr key={`sub-${idx}`} className="bg-cv-dark/30 border-b-2 border-cv-border/50">
-                  <td colSpan="5" className="px-3 py-1.5 text-xs text-cv-muted text-right font-semibold">
-                    Owned {stats.have}/{stats.cards}
-                  </td>
-                  <td className="px-3 py-1.5 text-xs text-cv-accent font-mono">{card.insert_type || 'Base'}</td>
-                  <td className="px-3 py-1.5 text-xs text-cv-gold font-mono">{card.parallel || '--'}</td>
-                  <td className="px-3 py-1.5 text-xs text-cv-gold font-mono text-center font-bold" title="Total copies">{stats.qty}</td>
-                  {parallelColumns.map(p => <td key={p.id}></td>)}
-                  <td></td>
-                  <td></td>
-                </tr>
-              ) : null;
-              return (<React.Fragment key={card.id}>
-              {groupHeader}
-              <tr className={`group border-b border-cv-border/30 hover:bg-white/[0.02] transition-colors ${card.qty > 0 ? '' : ''}`}>
-                {editingId === card.id ? (
+            {filtered.map(group => {
+              const ownedVariants = group.variants.filter(v => v.qty > 0);
+              const hasOwnedParallels = ownedVariants.some(v => v.parallel && v.parallel !== '');
+              const isExpanded = expandedCard === group.card_number;
+              const rcSp = group.rc_sp || [group.is_rc && 'RC', group.is_sp && 'SP'].filter(Boolean).join(' ');
+              // Use baseCard for editing/tracking, or first variant if no base
+              const primaryCard = group.baseCard || group.variants[0];
+
+              return (
+                <React.Fragment key={group.card_number}>
+                  {editingId === primaryCard?.id ? (
+                    <tr className="border-b border-cv-border/30 bg-cv-accent/[0.03]">
+                      <td className="px-2 py-1">
+                        <input type="text" value={editForm.card_number} onChange={e => setEditForm({...editForm, card_number: e.target.value})}
+                          className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text font-mono focus:outline-none" />
+                      </td>
+                      <td className="px-2 py-1">
+                        <input type="text" value={editForm.player} onChange={e => setEditForm({...editForm, player: e.target.value})}
+                          className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
+                      </td>
+                      <td className="px-2 py-1">
+                        <input type="text" value={editForm.team} onChange={e => setEditForm({...editForm, team: e.target.value})}
+                          className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
+                      </td>
+                      <td className="px-2 py-1">
+                        <input type="text" value={editForm.rc_sp} onChange={e => setEditForm({...editForm, rc_sp: e.target.value})}
+                          className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
+                      </td>
+                      <td className="px-2 py-1">
+                        <input type="number" value={editForm.qty} onChange={e => setEditForm({...editForm, qty: parseInt(e.target.value) || 0})}
+                          className="w-16 bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text text-center focus:outline-none" />
+                      </td>
+                      <td className="px-2 py-1 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => saveEdit(primaryCard.id)} className="p-1 rounded text-cv-accent hover:bg-cv-accent/20"><Check size={14} /></button>
+                          <button onClick={cancelEdit} className="p-1 rounded text-cv-muted hover:bg-white/10"><X size={14} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
                   <>
-                    <td></td>
-                    <td className="px-2 py-1">
-                      <input type="text" value={editForm.card_number} onChange={e => setEditForm({...editForm, card_number: e.target.value})}
-                        className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text font-mono focus:outline-none" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="text" value={editForm.player} onChange={e => setEditForm({...editForm, player: e.target.value})}
-                        className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="text" value={editForm.team} onChange={e => setEditForm({...editForm, team: e.target.value})}
-                        className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="text" value={editForm.rc_sp} onChange={e => setEditForm({...editForm, rc_sp: e.target.value})}
-                        className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="text" value={editForm.insert_type} onChange={e => setEditForm({...editForm, insert_type: e.target.value})}
-                        className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="text" value={editForm.parallel} onChange={e => setEditForm({...editForm, parallel: e.target.value})}
-                        className="w-full bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text focus:outline-none" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="number" value={editForm.qty} onChange={e => setEditForm({...editForm, qty: parseInt(e.target.value) || 0})}
-                        className="w-16 bg-cv-dark border border-cv-accent/50 rounded px-2 py-1 text-sm text-cv-text text-center focus:outline-none" />
-                    </td>
-                    {parallelColumns.map(p => <td key={p.id}></td>)}
-                    <td className="px-2 py-1 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => saveEdit(card.id)} className="p-1 rounded text-cv-accent hover:bg-cv-accent/20"><Check size={14} /></button>
-                        <button onClick={cancelEdit} className="p-1 rounded text-cv-muted hover:bg-white/10"><X size={14} /></button>
-                      </div>
-                    </td>
-                    <td></td>
-                  </>
-                ) : (
-                  <>
-                    <td className="px-2 py-2 text-center">
-                      <button
-                        onClick={() => toggleTrack(card.id)}
-                        className={`hover:scale-110 transition-transform ${trackedCards[card.id] ? 'text-cv-gold' : 'text-cv-muted/40'}`}
-                        title={trackedCards[card.id] ? 'Stop tracking price' : 'Track price on eBay'}
-                      >
-                        {trackedCards[card.id] ? '\u2605' : '\u2606'}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-cv-text font-mono">{card.card_number}</td>
-                    <td className={`px-3 py-2 ${card.is_focus_player ? 'bg-yellow-500/5' : ''}`}>
+                  {/* Main card row */}
+                  <tr
+                    onClick={() => ownedVariants.length > 1 || hasOwnedParallels ? setExpandedCard(isExpanded ? null : group.card_number) : null}
+                    className={`border-b border-cv-border/30 transition-colors group
+                      ${ownedVariants.length > 1 || hasOwnedParallels ? 'cursor-pointer hover:bg-white/[0.03]' : 'hover:bg-white/[0.01]'}
+                      ${hasOwnedParallels ? 'border-l-2 border-l-cv-accent/40' : ''}
+                      ${isExpanded ? 'bg-white/[0.02]' : ''}`}
+                  >
+                    <td className="px-3 py-2">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-cv-text">{card.player || '-'}</span>
-                        {card.player_tier === 'hof' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleTrack(primaryCard.id); }}
+                          className={`hover:scale-110 transition-transform text-sm ${trackedCards[primaryCard.id] ? 'text-cv-gold' : 'text-cv-muted/30 hover:text-cv-muted/60'}`}
+                          title={trackedCards[primaryCard.id] ? 'Stop tracking price' : 'Track price'}
+                        >
+                          {trackedCards[primaryCard.id] ? '\u2605' : '\u2606'}
+                        </button>
+                        <span className="text-cv-muted font-mono text-sm">{group.card_number}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-cv-text text-sm font-medium">{group.player || '-'}</span>
+                        {group.player_tier === 'hof' && (
                           <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">HOF</span>
                         )}
-                        {card.player_tier === 'future_hof' && (
+                        {group.player_tier === 'future_hof' && (
                           <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-gray-400/20 text-gray-300 border border-gray-400/30">F-HOF</span>
                         )}
-                        {card.player_tier === 'key_rookie' && (
+                        {group.player_tier === 'key_rookie' && (
                           <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-green-500/20 text-green-400 border border-green-500/30">KEY RC</span>
                         )}
-                        {card.player_tier === 'star' && (
+                        {group.player_tier === 'star' && (
                           <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">STAR</span>
                         )}
-                        {card.player && (
+                        {group.player && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); toggleFocusPlayer(card.player, card.is_focus_player); }}
-                            className={`opacity-0 group-hover:opacity-100 transition-opacity text-sm ${card.is_focus_player ? 'text-yellow-400 !opacity-100' : 'text-gray-600 hover:text-yellow-400'}`}
-                            title={card.is_focus_player ? 'Remove from focus players' : 'Add to focus players'}
+                            onClick={(e) => { e.stopPropagation(); toggleFocusPlayer(group.player, group.is_focus_player); }}
+                            className={`opacity-0 group-hover:opacity-100 transition-opacity text-sm ${group.is_focus_player ? 'text-yellow-400 !opacity-100' : 'text-gray-600 hover:text-yellow-400'}`}
+                            title={group.is_focus_player ? 'Remove from focus players' : 'Add to focus players'}
                           >
                             &#9733;
                           </button>
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2 text-cv-muted">{card.team || '-'}</td>
+                    <td className="px-3 py-2 text-cv-muted text-sm">{group.team || '-'}</td>
                     <td className="px-3 py-2">
-                      {card.rc_sp ? (
-                        <span className="inline-block px-1.5 py-0.5 rounded text-xs bg-cv-gold/10 text-cv-gold border border-cv-gold/20">{card.rc_sp}</span>
-                      ) : <span className="text-cv-muted">-</span>}
-                    </td>
-                    <td className="px-3 py-2 text-cv-text">{card.insert_type || '-'}</td>
-                    <td className="px-3 py-2">
-                      {card.parallel ? (
-                        <span className="text-cv-gold">{card.parallel}</span>
-                      ) : <span className="text-cv-muted">-</span>}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center justify-center gap-0.5">
-                        <button onClick={() => updateQty(card.id, (card.qty || 0) - 1)}
-                          disabled={(card.qty || 0) <= 0}
-                          className="p-0.5 rounded text-cv-muted hover:text-cv-red hover:bg-cv-red/10 transition-all disabled:opacity-20 disabled:pointer-events-none">
-                          <ChevronDown size={14} />
-                        </button>
-                        <span className={`font-mono font-bold min-w-[24px] text-center ${card.qty > 0 ? 'text-cv-accent' : 'text-cv-muted/40'}`}>
-                          {card.qty || 0}
-                        </span>
-                        <button onClick={() => updateQty(card.id, (card.qty || 0) + 1)}
-                          className="p-0.5 rounded text-cv-muted hover:text-cv-accent hover:bg-cv-accent/10 transition-all">
-                          <ChevronUp size={14} />
-                        </button>
-                      </div>
-                    </td>
-                    {parallelColumns.map(p => {
-                      const owned = card.owned_parallels?.find(op => op.parallel_id === p.id);
-                      const qty = owned?.qty || 0;
-                      return (
-                        <td key={p.id} className="text-center px-2 py-2">
-                          <button
-                            onClick={() => handleParallelQty(card.id, p.id, qty + 1)}
-                            onContextMenu={(e) => { e.preventDefault(); if (qty > 0) handleParallelQty(card.id, p.id, qty - 1); }}
-                            className={`w-8 h-6 rounded text-xs font-mono ${qty > 0 ? 'bg-cv-gold/20 text-cv-gold border border-cv-gold/30' : 'bg-cv-dark/30 text-cv-muted/30 border border-cv-border/30 hover:border-cv-accent/30'}`}
-                          >
-                            {qty || '\u00b7'}
-                          </button>
-                        </td>
-                      );
-                    })}
-                    <td className="px-3 py-2 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => startEdit(card)} className="p-1 rounded text-cv-muted hover:text-cv-accent hover:bg-cv-accent/10 transition-all"><Pencil size={13} /></button>
-                        <button onClick={() => deleteCard(card.id)} className="p-1 rounded text-cv-muted hover:text-cv-red hover:bg-cv-red/10 transition-all"><Trash2 size={13} /></button>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-right text-sm">
-                      {trackedCards[card.id]?.median_price != null ? (
-                        <span className="text-cv-gold font-mono">${trackedCards[card.id].median_price.toFixed(2)}</span>
-                      ) : cardPrices[card.id]?.median_price != null ? (
-                        <span className="text-cv-gold/70 font-mono">${cardPrices[card.id].median_price.toFixed(2)}</span>
-                      ) : trackedCards[card.id] ? (
-                        <span className="text-cv-muted text-xs">No data</span>
+                      {rcSp ? (
+                        <span className="inline-block px-1.5 py-0.5 rounded text-xs bg-cv-gold/10 text-cv-gold border border-cv-gold/20">{rcSp}</span>
                       ) : null}
                     </td>
+                    <td className="px-3 py-2 text-center">
+                      <span className={`font-mono font-bold text-sm ${group.totalQty > 0 ? 'text-cv-accent' : 'text-cv-muted/40'}`}>
+                        {group.totalQty}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={(e) => { e.stopPropagation(); startEdit(primaryCard); }}
+                          className="p-1 rounded text-cv-muted hover:text-cv-accent hover:bg-cv-accent/10 transition-all">
+                          <Pencil size={13} />
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteCard(primaryCard.id); }}
+                          className="p-1 rounded text-cv-muted hover:text-cv-red hover:bg-cv-red/10 transition-all">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+
+                  {/* Expanded: owned variants/parallels */}
+                  {isExpanded && ownedVariants.map(v => (
+                    <tr key={v.id} className="bg-cv-dark/20 border-b border-cv-border/20">
+                      <td></td>
+                      <td colSpan="3" className="px-3 py-1.5 text-xs">
+                        <span className="text-cv-text">{v.parallelName}</span>
+                        {v.parallel && availableParallels.find(p => p.name === v.parallel)?.print_run && (
+                          <span className="text-cv-muted ml-1">/{availableParallels.find(p => p.name === v.parallel).print_run}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1.5 text-center">
+                        <div className="flex items-center justify-center gap-0.5">
+                          <button onClick={(e) => { e.stopPropagation(); updateQty(v.id, (v.qty || 0) - 1); }}
+                            disabled={(v.qty || 0) <= 0}
+                            className="p-0.5 rounded text-cv-muted hover:text-cv-red hover:bg-cv-red/10 transition-all disabled:opacity-20 disabled:pointer-events-none">
+                            <ChevronDown size={12} />
+                          </button>
+                          <span className="font-mono font-bold text-xs text-cv-accent min-w-[20px] text-center">{v.qty}</span>
+                          <button onClick={(e) => { e.stopPropagation(); updateQty(v.id, (v.qty || 0) + 1); }}
+                            className="p-0.5 rounded text-cv-muted hover:text-cv-accent hover:bg-cv-accent/10 transition-all">
+                            <ChevronUp size={12} />
+                          </button>
+                        </div>
+                      </td>
+                      <td></td>
+                    </tr>
+                  ))}
                   </>
-                )}
-              </tr>
-              {groupFooter}
-              </React.Fragment>);
+                  )}
+                </React.Fragment>
+              );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={10 + parallelColumns.length} className="text-center py-8 text-cv-muted">
+                <td colSpan="6" className="text-center py-8 text-cv-muted">
                   {cards.length === 0 ? 'No cards in this set yet' : 'No cards match your search/filter'}
                 </td>
               </tr>
@@ -992,15 +892,12 @@ export default function SetDetail() {
           {filtered.length > 0 && (
             <tfoot>
               <tr className="bg-cv-dark/50 border-t-2 border-cv-accent/20">
-                <td colSpan="5" className="px-3 py-2.5 text-sm text-cv-text font-bold text-right">
-                  Owned <span className="text-cv-accent">{filtered.filter(c => c.qty > 0).length}</span>/{filtered.length} · {Object.keys(groupStats).length} group{Object.keys(groupStats).length !== 1 ? 's' : ''}
+                <td colSpan="4" className="px-3 py-2.5 text-sm text-cv-text font-bold text-right">
+                  {filtered.length} cards · {filtered.filter(g => g.totalQty > 0).length} owned
                 </td>
-                <td colSpan="2" className="px-3 py-2.5"></td>
-                <td className="px-3 py-2.5 text-center text-sm text-cv-gold font-mono font-bold" title="Total copies">
-                  {filtered.reduce((s, c) => s + (c.qty || 0), 0)}
+                <td className="px-3 py-2.5 text-center text-sm text-cv-gold font-mono font-bold">
+                  {filtered.reduce((s, g) => s + g.totalQty, 0)}
                 </td>
-                {parallelColumns.map(p => <td key={p.id}></td>)}
-                <td></td>
                 <td></td>
               </tr>
             </tfoot>
@@ -1008,7 +905,7 @@ export default function SetDetail() {
         </table>
       </div>
       <div className="text-xs text-cv-muted mt-2 text-right">
-        Showing {filtered.length} of {totalCards} cards
+        Showing {filtered.length} of {cardGroups.length} cards
       </div>
 
       {/* Checklist Wizard Modal */}
