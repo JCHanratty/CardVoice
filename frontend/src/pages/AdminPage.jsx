@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Shield, Search, Download, RefreshCw, ChevronRight, CheckCircle, XCircle, Upload } from 'lucide-react';
+import { Shield, Search, Download, RefreshCw, ChevronRight, CheckCircle, XCircle, Upload, Play, Square, Trash2, Eye, SkipForward, ExternalLink } from 'lucide-react';
+import ScrapePreviewModal from '../components/ScrapePreviewModal';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -47,6 +48,17 @@ export default function AdminPage() {
   const [backfillStartedAt, setBackfillStartedAt] = useState(null);
   const [backfillResult, setBackfillResult] = useState(null);
   const backfillLogEndRef = useRef(null);
+
+  // Scrape queue state
+  const [scrapeQueue, setScrapeQueue] = useState([]);
+  const [scrapeStatus, setScrapeStatus] = useState({ running: false, total: 0, completed: 0, errors: 0, needsReview: 0 });
+  const [scrapeFilter, setScrapeFilter] = useState('all');
+  const [showQueueLoad, setShowQueueLoad] = useState(false);
+  const [queueJsonInput, setQueueJsonInput] = useState('');
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewItem, setPreviewItem] = useState(null);
+  const [previewData, setPreviewData] = useState(null);
+  const [assignInputs, setAssignInputs] = useState({});
 
   const checkForUpdates = async () => {
     if (!window.electronAPI?.checkForUpdates) {
@@ -303,6 +315,146 @@ export default function AdminPage() {
     } catch (e) { /* ignore */ }
   };
 
+  // --- Scrape queue functions ---
+  const loadScrapeQueue = async () => {
+    try {
+      const res = await axios.get(`${API}/api/admin/tcdb/scrape-queue`);
+      setScrapeQueue(res.data.items || res.data || []);
+      if (res.data.status) setScrapeStatus(res.data.status);
+    } catch (e) { /* ignore */ }
+  };
+
+  const submitQueueJson = async () => {
+    try {
+      const parsed = JSON.parse(queueJsonInput);
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue`, { items: Array.isArray(parsed) ? parsed : parsed.items || [parsed] });
+      setQueueJsonInput('');
+      setShowQueueLoad(false);
+      loadScrapeQueue();
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        alert('Invalid JSON');
+      } else {
+        alert(err.response?.data?.error || err.message);
+      }
+    }
+  };
+
+  const startScraping = async () => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue/start`);
+      setScrapeStatus(prev => ({ ...prev, running: true }));
+    } catch (err) {
+      alert(err.response?.data?.error || err.message);
+    }
+  };
+
+  const stopScraping = async () => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue/stop`);
+      setScrapeStatus(prev => ({ ...prev, running: false }));
+    } catch (err) { /* ignore */ }
+  };
+
+  const pollScrapeStatus = async () => {
+    try {
+      const res = await axios.get(`${API}/api/admin/tcdb/scrape-queue/status`);
+      setScrapeStatus(res.data);
+    } catch (e) { /* ignore */ }
+  };
+
+  const openPreview = async (queueItem) => {
+    setPreviewItem(queueItem);
+    setShowPreviewModal(true);
+    setPreviewData(null);
+    try {
+      const res = await axios.get(`${API}/api/admin/tcdb/scrape-queue/${queueItem.id}/preview`);
+      setPreviewData(res.data);
+    } catch (err) {
+      alert(err.response?.data?.error || err.message);
+      setShowPreviewModal(false);
+    }
+  };
+
+  const importQueueItem = async (id) => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue/${id}/import`);
+      loadScrapeQueue();
+      setShowPreviewModal(false);
+      setPreviewItem(null);
+      setPreviewData(null);
+    } catch (err) {
+      alert(err.response?.data?.error || err.message);
+    }
+  };
+
+  const skipQueueItem = async (id) => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue/${id}/skip`);
+      loadScrapeQueue();
+      setShowPreviewModal(false);
+      setPreviewItem(null);
+      setPreviewData(null);
+    } catch (err) { /* ignore */ }
+  };
+
+  const rescrapeQueueItem = async (id) => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue/${id}/rescrape`);
+      loadScrapeQueue();
+      setShowPreviewModal(false);
+      setPreviewItem(null);
+      setPreviewData(null);
+    } catch (err) { /* ignore */ }
+  };
+
+  const deleteQueueItem = async (id) => {
+    try {
+      await axios.delete(`${API}/api/admin/tcdb/scrape-queue/${id}`);
+      loadScrapeQueue();
+    } catch (err) { /* ignore */ }
+  };
+
+  const assignSetId = async (id, tcdbSetId) => {
+    try {
+      await axios.put(`${API}/api/admin/tcdb/scrape-queue/${id}/assign`, { tcdb_set_id: tcdbSetId });
+      loadScrapeQueue();
+    } catch (err) {
+      alert(err.response?.data?.error || err.message);
+    }
+  };
+
+  const importAllScraped = async () => {
+    try {
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue/import-all`);
+      loadScrapeQueue();
+    } catch (err) {
+      alert(err.response?.data?.error || err.message);
+    }
+  };
+
+  const clearQueue = async () => {
+    if (!window.confirm('Clear the entire scrape queue? This cannot be undone.')) return;
+    try {
+      await axios.delete(`${API}/api/admin/tcdb/scrape-queue`);
+      setScrapeQueue([]);
+      setScrapeStatus({ running: false, total: 0, completed: 0, errors: 0, needsReview: 0 });
+    } catch (err) { /* ignore */ }
+  };
+
+  const handlePreviewEdit = async (operations) => {
+    if (!previewItem) return;
+    try {
+      await axios.put(`${API}/api/admin/tcdb/scrape-queue/${previewItem.id}/edit`, { operations });
+      // Refresh preview data
+      const res = await axios.get(`${API}/api/admin/tcdb/scrape-queue/${previewItem.id}/preview`);
+      setPreviewData(res.data);
+      loadScrapeQueue();
+    } catch (err) {
+      alert(err.response?.data?.error || err.message);
+    }
+  };
+
   const formatElapsed = (startedAt) => {
     if (!startedAt) return '0:00';
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
@@ -328,6 +480,49 @@ export default function AdminPage() {
       backfillLogEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [backfillLog]);
+
+  // Load scrape queue on mount
+  useEffect(() => {
+    loadScrapeQueue();
+  }, []);
+
+  // Poll scrape status when running
+  useEffect(() => {
+    if (!scrapeStatus.running) return;
+    const interval = setInterval(() => {
+      pollScrapeStatus();
+      loadScrapeQueue();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [scrapeStatus.running]);
+
+  // Scrape queue filter helpers
+  const filteredQueue = scrapeFilter === 'all'
+    ? scrapeQueue
+    : scrapeQueue.filter(q => q.status === scrapeFilter);
+
+  const queueCounts = {
+    all: scrapeQueue.length,
+    pending: scrapeQueue.filter(q => q.status === 'pending').length,
+    needs_review: scrapeQueue.filter(q => q.status === 'needs_review').length,
+    scraped: scrapeQueue.filter(q => q.status === 'scraped').length,
+    imported: scrapeQueue.filter(q => q.status === 'imported').length,
+    error: scrapeQueue.filter(q => q.status === 'error').length,
+  };
+
+  const statusBadge = (status) => {
+    const map = {
+      pending: 'bg-gray-600/20 text-gray-400',
+      searching: 'bg-blue-600/20 text-blue-400 animate-pulse',
+      scraping: 'bg-blue-600/20 text-blue-400 animate-pulse',
+      needs_review: 'bg-yellow-600/20 text-yellow-400',
+      scraped: 'bg-indigo-600/20 text-indigo-400',
+      imported: 'bg-green-600/20 text-green-400',
+      error: 'bg-red-600/20 text-red-400',
+      skipped: 'bg-gray-600/20 text-gray-500',
+    };
+    return map[status] || 'bg-gray-600/20 text-gray-400';
+  };
 
   const filteredSets = sets.filter(s =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -647,6 +842,252 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* Scrape Queue */}
+      <div className="bg-cv-panel rounded-xl border border-cv-border p-4 mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-cv-text">Scrape Queue</h3>
+            {scrapeQueue.length > 0 && (
+              <span className="text-xs bg-cv-accent/20 text-cv-accent px-2 py-0.5 rounded-full font-mono">
+                {scrapeQueue.length}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowQueueLoad(true)}
+              className="px-3 py-1.5 rounded-lg text-xs bg-cv-accent/20 text-cv-accent font-medium hover:bg-cv-accent/30 transition-colors"
+            >
+              Load Queue
+            </button>
+            {scrapeStatus.running ? (
+              <button
+                onClick={stopScraping}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-red-600/20 text-red-400 font-medium hover:bg-red-600/30 transition-colors"
+              >
+                <Square size={12} /> Stop
+              </button>
+            ) : (
+              <button
+                onClick={startScraping}
+                disabled={scrapeQueue.filter(q => q.status === 'pending').length === 0}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-green-600/20 text-green-400 font-medium hover:bg-green-600/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Play size={12} /> Start
+              </button>
+            )}
+            <button
+              onClick={importAllScraped}
+              disabled={queueCounts.scraped === 0}
+              className="px-3 py-1.5 rounded-lg text-xs bg-cv-accent text-white font-medium hover:bg-cv-accent/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Import All Scraped
+            </button>
+            <button
+              onClick={clearQueue}
+              disabled={scrapeQueue.length === 0}
+              className="px-3 py-1.5 rounded-lg text-xs bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+
+        {/* Progress bar when running */}
+        {scrapeStatus.running && scrapeStatus.total > 0 && (
+          <div className="mb-3">
+            <div className="w-full h-1.5 bg-cv-border/50 rounded-full mb-1 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(100, Math.round((scrapeStatus.completed / scrapeStatus.total) * 100))}%` }}
+              />
+            </div>
+            <div className="text-xs text-cv-muted">
+              {scrapeStatus.completed}/{scrapeStatus.total} completed
+              {scrapeStatus.currentItem && <span className="ml-2 text-cv-text">{scrapeStatus.currentItem}</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Filter tabs */}
+        {scrapeQueue.length > 0 && (
+          <div className="flex gap-1 mb-3 flex-wrap">
+            {[
+              { key: 'all', label: 'All' },
+              { key: 'pending', label: 'Pending' },
+              { key: 'needs_review', label: 'Needs Review' },
+              { key: 'scraped', label: 'Scraped' },
+              { key: 'imported', label: 'Imported' },
+              { key: 'error', label: 'Errors' },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setScrapeFilter(tab.key)}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  scrapeFilter === tab.key
+                    ? 'bg-cv-accent/20 text-cv-accent'
+                    : 'text-cv-muted hover:text-cv-text hover:bg-white/5'
+                }`}
+              >
+                {tab.label} ({queueCounts[tab.key] || 0})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Queue table */}
+        {scrapeQueue.length > 0 && (
+          <div className="max-h-96 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-cv-panel">
+                <tr className="border-b border-cv-border/30 text-xs text-cv-muted uppercase">
+                  <th className="text-left py-2 font-semibold w-10">#</th>
+                  <th className="text-left py-2 font-semibold w-16">Year</th>
+                  <th className="text-left py-2 font-semibold w-24">Brand</th>
+                  <th className="text-left py-2 font-semibold">Set Name</th>
+                  <th className="text-center py-2 font-semibold w-28">Status</th>
+                  <th className="text-center py-2 font-semibold w-56">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredQueue.map((q, i) => (
+                  <tr key={q.id} className="border-b border-cv-border/10 hover:bg-white/[0.02]">
+                    <td className="py-2 text-cv-muted font-mono text-xs">{i + 1}</td>
+                    <td className="py-2 text-cv-text">{q.year || ''}</td>
+                    <td className="py-2 text-cv-muted">{q.brand || ''}</td>
+                    <td className="py-2 text-cv-text font-medium">{q.set_name || q.name || ''}</td>
+                    <td className="py-2 text-center">
+                      <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${statusBadge(q.status)}`}>
+                        {(q.status || 'pending').replace('_', ' ')}
+                      </span>
+                    </td>
+                    <td className="py-2 text-center">
+                      <div className="flex items-center justify-center gap-1 flex-wrap">
+                        {q.status === 'scraped' && (
+                          <>
+                            <button onClick={() => openPreview(q)}
+                              className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-cv-secondary text-cv-text hover:bg-cv-secondary/80 transition-colors">
+                              <Eye size={12} /> Preview
+                            </button>
+                            <button onClick={() => importQueueItem(q.id)}
+                              className="px-2 py-1 rounded text-xs bg-green-600/20 text-green-400 hover:bg-green-600/30 transition-colors">
+                              Import
+                            </button>
+                            <button onClick={() => skipQueueItem(q.id)}
+                              className="px-2 py-1 rounded text-xs bg-gray-600/20 text-gray-400 hover:bg-gray-600/30 transition-colors">
+                              Skip
+                            </button>
+                            <button onClick={() => deleteQueueItem(q.id)}
+                              className="p-1 rounded text-cv-muted hover:text-red-400 hover:bg-red-600/10 transition-colors">
+                              <Trash2 size={13} />
+                            </button>
+                          </>
+                        )}
+                        {q.status === 'needs_review' && (
+                          <>
+                            {q.scraped_data?.candidates && (
+                              <span className="text-xs text-cv-muted mr-1">
+                                {q.scraped_data.candidates.length} candidates
+                              </span>
+                            )}
+                            <input
+                              type="text"
+                              value={assignInputs[q.id] || ''}
+                              onChange={e => setAssignInputs(prev => ({ ...prev, [q.id]: e.target.value }))}
+                              placeholder="TCDB Set ID"
+                              className="w-24 bg-cv-dark border border-cv-border/50 rounded px-2 py-1 text-xs text-cv-text focus:border-cv-accent focus:outline-none"
+                            />
+                            <button
+                              onClick={() => { assignSetId(q.id, assignInputs[q.id]); setAssignInputs(prev => ({ ...prev, [q.id]: '' })); }}
+                              disabled={!assignInputs[q.id]}
+                              className="px-2 py-1 rounded text-xs bg-cv-accent text-white hover:bg-cv-accent/80 disabled:opacity-50 transition-colors"
+                            >
+                              Assign
+                            </button>
+                            <button onClick={() => deleteQueueItem(q.id)}
+                              className="p-1 rounded text-cv-muted hover:text-red-400 hover:bg-red-600/10 transition-colors">
+                              <Trash2 size={13} />
+                            </button>
+                          </>
+                        )}
+                        {q.status === 'error' && (
+                          <>
+                            {q.error_message && (
+                              <span className="text-xs text-red-400 max-w-[150px] truncate" title={q.error_message}>
+                                {q.error_message}
+                              </span>
+                            )}
+                            <button onClick={() => rescrapeQueueItem(q.id)}
+                              className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-cv-secondary text-cv-text hover:bg-cv-secondary/80 transition-colors">
+                              <RefreshCw size={12} /> Re-scrape
+                            </button>
+                            <button onClick={() => deleteQueueItem(q.id)}
+                              className="p-1 rounded text-cv-muted hover:text-red-400 hover:bg-red-600/10 transition-colors">
+                              <Trash2 size={13} />
+                            </button>
+                          </>
+                        )}
+                        {q.status === 'imported' && q.card_set_id && (
+                          <a href={`/sets/${q.card_set_id}`}
+                            className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-cv-accent/20 text-cv-accent hover:bg-cv-accent/30 transition-colors">
+                            <ExternalLink size={12} /> View Set
+                          </a>
+                        )}
+                        {q.status === 'pending' && (
+                          <button onClick={() => deleteQueueItem(q.id)}
+                            className="p-1 rounded text-cv-muted hover:text-red-400 hover:bg-red-600/10 transition-colors">
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filteredQueue.length === 0 && (
+                  <tr><td colSpan={6} className="py-6 text-center text-cv-muted text-xs">No items match filter</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {scrapeQueue.length === 0 && (
+          <p className="text-xs text-cv-muted">No items in queue. Click "Load Queue" to add sets.</p>
+        )}
+      </div>
+
+      {/* Load Queue Modal */}
+      {showQueueLoad && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-cv-panel border border-cv-border rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl">
+            <h2 className="text-lg font-display font-bold text-cv-text mb-3">Load Scrape Queue</h2>
+            <p className="text-xs text-cv-muted mb-3">Paste a JSON array of sets to scrape. Each item needs at minimum: year, brand, set_name.</p>
+            <textarea
+              value={queueJsonInput}
+              onChange={e => setQueueJsonInput(e.target.value)}
+              placeholder='[{"year": 2024, "brand": "Topps", "set_name": "Chrome"}]'
+              rows={8}
+              className="w-full bg-cv-dark border border-cv-border rounded-lg px-3 py-2 text-xs text-cv-text font-mono focus:border-cv-accent focus:outline-none resize-y mb-4"
+            />
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setShowQueueLoad(false); setQueueJsonInput(''); }}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-cv-border/50 text-cv-muted hover:text-cv-text hover:bg-white/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitQueueJson}
+                disabled={!queueJsonInput.trim()}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-cv-accent text-white hover:bg-cv-accent/80 disabled:opacity-50 transition-all"
+              >
+                Load
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Browse Section */}
       <div className="bg-cv-panel rounded-xl p-5 border border-cv-border/50 mb-6">
         <h2 className="text-lg font-display font-semibold text-cv-text mb-4">Import from TCDB</h2>
@@ -828,6 +1269,19 @@ export default function AdminPage() {
             </>
           )}
         </div>
+      )}
+
+      {/* Scrape Preview Modal */}
+      {showPreviewModal && previewItem && previewData && (
+        <ScrapePreviewModal
+          item={previewItem}
+          data={previewData}
+          onClose={() => { setShowPreviewModal(false); setPreviewItem(null); setPreviewData(null); }}
+          onImport={importQueueItem}
+          onSkip={skipQueueItem}
+          onRescrape={rescrapeQueueItem}
+          onEdit={handlePreviewEdit}
+        />
       )}
 
       {/* Import Progress Modal */}
