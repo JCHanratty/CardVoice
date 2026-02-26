@@ -416,12 +416,45 @@ function setMeta(db, key, value) {
 }
 
 /**
+ * Backfill missing "Base" insert type for sets that have Base cards but no
+ * set_insert_types row named 'Base'. Only targets sets that already have other
+ * insert types (i.e. have metadata). Idempotent — skips sets that already have it.
+ */
+function _backfillBaseInsertTypes(db) {
+  const missingBase = db.prepare(`
+    SELECT cs.id as set_id,
+      (SELECT COUNT(*) FROM cards WHERE set_id = cs.id AND insert_type = 'Base') as base_cards
+    FROM card_sets cs
+    WHERE EXISTS (SELECT 1 FROM cards WHERE set_id = cs.id AND insert_type = 'Base')
+      AND NOT EXISTS (SELECT 1 FROM set_insert_types WHERE set_id = cs.id AND name = 'Base')
+      AND (SELECT COUNT(*) FROM set_insert_types WHERE set_id = cs.id) > 0
+  `).all();
+
+  if (missingBase.length === 0) return;
+
+  const insert = db.prepare(
+    "INSERT OR IGNORE INTO set_insert_types (set_id, name, card_count, section_type) VALUES (?, 'Base', ?, 'base')"
+  );
+  const run = db.transaction(() => {
+    for (const row of missingBase) {
+      insert.run(row.set_id, row.base_cards);
+    }
+  });
+  run();
+  console.log(`[Migration] Backfilled ${missingBase.length} missing Base insert types`);
+}
+
+
+/**
  * Hierarchy Fix V2 — data quality cleanup migration.
  * Fixes: phantom Base in inserts, empty Series shells, duplicate insert names,
  * Chrome/Foil variant inserts → parallels, and scoping existing parallels.
  * Idempotent — guarded by app_meta flag.
  */
 function _migrateHierarchyFixV2(db) {
+  // Fix 7 (backfill Base insert types) runs independently — always check
+  _backfillBaseInsertTypes(db);
+
   if (getMeta(db, 'hierarchy_fix_v2_done') === '1') return;
 
   const { PARALLEL_KEYWORDS } = require('./parallel-keywords');
@@ -671,6 +704,8 @@ function _migrateHierarchyFixV2(db) {
       fix1++;
     }
     console.log(`[Migration]   Fix 1: Scoped ${fix1} insert-prefixed parallels`);
+
+    // Fix 7 handled separately in _backfillBaseInsertTypes()
   });
 
   migrate();
