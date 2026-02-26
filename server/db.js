@@ -416,9 +416,9 @@ function setMeta(db, key, value) {
 }
 
 /**
- * Backfill missing "Base" insert type for sets that have Base cards but no
- * set_insert_types row named 'Base'. Only targets sets that already have other
- * insert types (i.e. have metadata). Idempotent — skips sets that already have it.
+ * Backfill missing "Base" insert type for ALL sets that have Base cards but no
+ * set_insert_types row named 'Base'. Idempotent — runs on every startup,
+ * skips sets that already have it.
  */
 function _backfillBaseInsertTypes(db) {
   const missingBase = db.prepare(`
@@ -427,7 +427,6 @@ function _backfillBaseInsertTypes(db) {
     FROM card_sets cs
     WHERE EXISTS (SELECT 1 FROM cards WHERE set_id = cs.id AND insert_type = 'Base')
       AND NOT EXISTS (SELECT 1 FROM set_insert_types WHERE set_id = cs.id AND name = 'Base')
-      AND (SELECT COUNT(*) FROM set_insert_types WHERE set_id = cs.id) > 0
   `).all();
 
   if (missingBase.length === 0) return;
