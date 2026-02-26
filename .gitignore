@@ -21,3 +21,6 @@ electron/resources/checklist-catalog.db
 
 # Legacy Python backend
 backend/
+
+# Git worktrees
+.worktrees/
