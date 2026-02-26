@@ -16,7 +16,7 @@ export default function EditSectionsModal({ open, onOpenChange, setId, onUpdate 
   const [pForm, setPForm] = useState({});
   const [addingIt, setAddingIt] = useState(false);
   const [addingP, setAddingP] = useState(false);
-  const [newIt, setNewIt] = useState({ name: '', card_count: '', odds: '', section_type: 'base' });
+  const [newIt, setNewIt] = useState({ name: '', card_count: '', odds: '', section_type: 'base', tracked: 0 });
   const [newP, setNewP] = useState({ name: '', print_run: '', exclusive: '', variation_type: 'parallel' });
 
   const load = () => {
@@ -43,7 +43,19 @@ export default function EditSectionsModal({ open, onOpenChange, setId, onUpdate 
   // Insert Types
   const startEditIt = (it) => {
     setEditingIt(it.id);
-    setItForm({ name: it.name, card_count: it.card_count || 0, odds: it.odds || '', section_type: it.section_type || 'base' });
+    setItForm({ name: it.name, card_count: it.card_count || 0, odds: it.odds || '', section_type: it.section_type || 'base', tracked: it.tracked });
+  };
+
+  const toggleTracked = async (it) => {
+    try {
+      const res = await axios.put(`${API}/api/insert-types/${it.id}`, {
+        tracked: it.tracked ? 0 : 1,
+      });
+      setInsertTypes(prev => prev.map(t => t.id === it.id ? { ...t, tracked: res.data.tracked } : t));
+      onUpdate?.();
+    } catch (err) {
+      console.error('Toggle tracked failed:', err);
+    }
   };
 
   const saveEditIt = async (id) => {
@@ -75,7 +87,7 @@ export default function EditSectionsModal({ open, onOpenChange, setId, onUpdate 
         ...newIt,
         card_count: parseInt(newIt.card_count) || 0,
       });
-      setNewIt({ name: '', card_count: '', odds: '', section_type: 'base' });
+      setNewIt({ name: '', card_count: '', odds: '', section_type: 'base', tracked: 0 });
       setAddingIt(false);
       load();
       onUpdate();
@@ -169,6 +181,7 @@ export default function EditSectionsModal({ open, onOpenChange, setId, onUpdate 
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-cv-border/30 text-xs text-cv-muted uppercase">
+                  <th className="text-center py-2 font-semibold w-16">Tracked</th>
                   <th className="text-left py-2 font-semibold">Name</th>
                   <th className="text-center py-2 font-semibold w-20">Cards</th>
                   <th className="text-center py-2 font-semibold w-24">Type</th>
@@ -181,6 +194,18 @@ export default function EditSectionsModal({ open, onOpenChange, setId, onUpdate 
                   <tr key={it.id} className="border-b border-cv-border/20">
                     {editingIt === it.id ? (
                       <>
+                        <td className="py-2 px-1 text-center">
+                          <button
+                            onClick={() => setItForm({ ...itForm, tracked: itForm.tracked ? 0 : 1 })}
+                            className={`w-8 h-4 rounded-full transition-colors relative inline-block ${
+                              itForm.tracked ? 'bg-cv-accent' : 'bg-cv-dark/50 border border-cv-border/50'
+                            }`}
+                          >
+                            <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${
+                              itForm.tracked ? 'translate-x-4' : 'translate-x-0.5'
+                            }`} />
+                          </button>
+                        </td>
                         <td className="py-2 pr-2">
                           <input value={itForm.name} onChange={e => setItForm({ ...itForm, name: e.target.value })}
                             className={inputCls + ' w-full'} />
@@ -208,6 +233,18 @@ export default function EditSectionsModal({ open, onOpenChange, setId, onUpdate 
                       </>
                     ) : (
                       <>
+                        <td className="py-2 px-1 text-center">
+                          <button
+                            onClick={() => toggleTracked(it)}
+                            className={`w-8 h-4 rounded-full transition-colors relative inline-block ${
+                              it.tracked ? 'bg-cv-accent' : 'bg-cv-dark/50 border border-cv-border/50'
+                            }`}
+                          >
+                            <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${
+                              it.tracked ? 'translate-x-4' : 'translate-x-0.5'
+                            }`} />
+                          </button>
+                        </td>
                         <td className="py-2 pr-2 text-cv-text font-medium">{it.name}</td>
                         <td className="py-2 px-1 text-center text-cv-muted font-mono">{it.card_count || '—'}</td>
                         <td className="py-2 px-1 text-center">
@@ -225,10 +262,22 @@ export default function EditSectionsModal({ open, onOpenChange, setId, onUpdate 
                   </tr>
                 ))}
                 {insertTypes.length === 0 && !addingIt && (
-                  <tr><td colSpan={5} className="py-4 text-center text-cv-muted text-xs">No insert types defined</td></tr>
+                  <tr><td colSpan={6} className="py-4 text-center text-cv-muted text-xs">No insert types defined</td></tr>
                 )}
                 {addingIt && (
                   <tr className="border-b border-cv-border/20 bg-cv-accent/[0.03]">
+                    <td className="py-2 px-1 text-center">
+                      <button
+                        onClick={() => setNewIt({ ...newIt, tracked: newIt.tracked ? 0 : 1 })}
+                        className={`w-8 h-4 rounded-full transition-colors relative inline-block ${
+                          newIt.tracked ? 'bg-cv-accent' : 'bg-cv-dark/50 border border-cv-border/50'
+                        }`}
+                      >
+                        <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${
+                          newIt.tracked ? 'translate-x-4' : 'translate-x-0.5'
+                        }`} />
+                      </button>
+                    </td>
                     <td className="py-2 pr-2">
                       <input value={newIt.name} onChange={e => setNewIt({ ...newIt, name: e.target.value })}
                         className={inputCls + ' w-full'} placeholder="Section name" autoFocus />
