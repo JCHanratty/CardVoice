@@ -240,6 +240,17 @@ function openDb(dbPath) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
   }
 
+  // Migration: tracked toggle for insert types (progress stats, tree expansion)
+  const trackedCols = [
+    "ALTER TABLE set_insert_types ADD COLUMN tracked INTEGER DEFAULT 0",
+  ];
+  for (const sql of trackedCols) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+  }
+
+  // Set tracked = 1 for all Base insert types
+  db.prepare("UPDATE set_insert_types SET tracked = 1 WHERE name = 'Base' AND tracked = 0").run();
+
   // Pricing indexes
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_card ON price_history(card_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_set ON price_history(set_id)`); } catch(e) {}
