@@ -697,29 +697,60 @@ function createRoutes(db) {
     });
 
     const parallels = db.prepare(
-      'SELECT id, name, print_run, exclusive, notes, serial_max, channels, variation_type FROM set_parallels WHERE set_id = ? ORDER BY id'
+      'SELECT id, name, print_run, exclusive, notes, serial_max, channels, variation_type, insert_type_id FROM set_parallels WHERE set_id = ? ORDER BY insert_type_id NULLS FIRST, id'
     ).all(setId);
 
-    // Nest parallels under their insert types via the junction table
+    // Nest parallels under their insert types using both:
+    // 1. set_parallels.insert_type_id (direct FK, preferred)
+    // 2. insert_type_parallels junction table (legacy/catalog imports)
+    const parallelsByInsertType = {};
+
+    // Direct FK scoping
+    for (const p of parallels) {
+      if (p.insert_type_id) {
+        if (!parallelsByInsertType[p.insert_type_id]) parallelsByInsertType[p.insert_type_id] = [];
+        parallelsByInsertType[p.insert_type_id].push({
+          id: p.id, name: p.name, print_run: p.print_run,
+          exclusive: p.exclusive, notes: p.notes, serial_max: p.serial_max,
+          channels: p.channels, variation_type: p.variation_type,
+          insert_type_id: p.insert_type_id,
+        });
+      }
+    }
+
+    // Legacy junction table (for parallels without direct insert_type_id)
     const junctionRows = db.prepare(`
       SELECT itp.insert_type_id, itp.parallel_id, sp.name, sp.print_run, sp.exclusive, sp.notes, sp.serial_max, sp.channels, sp.variation_type
       FROM insert_type_parallels itp
       JOIN set_parallels sp ON sp.id = itp.parallel_id
-      WHERE sp.set_id = ?
+      WHERE sp.set_id = ? AND sp.insert_type_id IS NULL
     `).all(setId);
 
-    const parallelsByInsertType = {};
     for (const row of junctionRows) {
       if (!parallelsByInsertType[row.insert_type_id]) parallelsByInsertType[row.insert_type_id] = [];
-      parallelsByInsertType[row.insert_type_id].push({
-        id: row.parallel_id, name: row.name, print_run: row.print_run,
-        exclusive: row.exclusive, notes: row.notes, serial_max: row.serial_max,
-        channels: row.channels, variation_type: row.variation_type,
-      });
+      // Avoid duplicates
+      const exists = parallelsByInsertType[row.insert_type_id].some(p => p.id === row.parallel_id);
+      if (!exists) {
+        parallelsByInsertType[row.insert_type_id].push({
+          id: row.parallel_id, name: row.name, print_run: row.print_run,
+          exclusive: row.exclusive, notes: row.notes, serial_max: row.serial_max,
+          channels: row.channels, variation_type: row.variation_type,
+        });
+      }
     }
 
+    // Also include unscoped parallels (insert_type_id IS NULL, not in junction) as base-level
+    const unscopedParallels = parallels.filter(p => !p.insert_type_id);
+
     for (const it of insertTypes) {
-      it.parallels = parallelsByInsertType[it.id] || [];
+      const scoped = parallelsByInsertType[it.id] || [];
+      // Base-level (unscoped) parallels apply to all insert types
+      it.parallels = [...unscopedParallels.map(p => ({
+        id: p.id, name: p.name, print_run: p.print_run,
+        exclusive: p.exclusive, notes: p.notes, serial_max: p.serial_max,
+        channels: p.channels, variation_type: p.variation_type,
+        insert_type_id: null,
+      })), ...scoped];
     }
 
     res.json({ insertTypes, parallels });
@@ -1391,15 +1422,15 @@ function createRoutes(db) {
     const cardSet = db.prepare('SELECT id FROM card_sets WHERE id = ?').get(setId);
     if (!cardSet) return res.status(404).json({ detail: 'Set not found' });
 
-    const { name, print_run, exclusive, notes, serial_max, channels, variation_type } = req.body;
+    const { name, print_run, exclusive, notes, serial_max, channels, variation_type, insert_type_id } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ detail: 'name is required' });
 
     const existing = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ?').get(setId, name.trim());
     if (existing) return res.status(400).json({ detail: 'Parallel already exists for this set' });
 
     const info = db.prepare(
-      'INSERT INTO set_parallels (set_id, name, print_run, exclusive, notes, serial_max, channels, variation_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(setId, name.trim(), print_run || null, exclusive || '', notes || '', serial_max || null, channels || '', variation_type || 'parallel');
+      'INSERT INTO set_parallels (set_id, name, print_run, exclusive, notes, serial_max, channels, variation_type, insert_type_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(setId, name.trim(), print_run || null, exclusive || '', notes || '', serial_max || null, channels || '', variation_type || 'parallel', insert_type_id || null);
 
     const row = db.prepare('SELECT * FROM set_parallels WHERE id = ?').get(info.lastInsertRowid);
     res.json(row);
@@ -1411,7 +1442,7 @@ function createRoutes(db) {
     const p = db.prepare('SELECT * FROM set_parallels WHERE id = ?').get(pId);
     if (!p) return res.status(404).json({ detail: 'Parallel not found' });
 
-    const { name, print_run, exclusive, notes, serial_max, channels, variation_type } = req.body;
+    const { name, print_run, exclusive, notes, serial_max, channels, variation_type, insert_type_id } = req.body;
     const oldName = p.name;
 
     if (name !== undefined && name.trim()) {
@@ -1431,6 +1462,7 @@ function createRoutes(db) {
     if (serial_max !== undefined) db.prepare('UPDATE set_parallels SET serial_max = ? WHERE id = ?').run(serial_max, pId);
     if (channels !== undefined) db.prepare('UPDATE set_parallels SET channels = ? WHERE id = ?').run(channels, pId);
     if (variation_type !== undefined) db.prepare('UPDATE set_parallels SET variation_type = ? WHERE id = ?').run(variation_type, pId);
+    if (insert_type_id !== undefined) db.prepare('UPDATE set_parallels SET insert_type_id = ? WHERE id = ?').run(insert_type_id, pId);
 
     const updated = db.prepare('SELECT * FROM set_parallels WHERE id = ?').get(pId);
     res.json(updated);

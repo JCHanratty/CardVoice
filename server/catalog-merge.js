@@ -105,15 +105,16 @@ function mergeCatalog(db, opts = {}) {
         section_type = COALESCE(excluded.section_type, set_insert_types.section_type)
     `);
     const upsertParallel = db.prepare(`
-      INSERT INTO set_parallels (set_id, name, print_run, exclusive, notes, serial_max, channels, variation_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO set_parallels (set_id, name, print_run, exclusive, notes, serial_max, channels, variation_type, insert_type_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(set_id, name) DO UPDATE SET
         print_run = COALESCE(excluded.print_run, set_parallels.print_run),
         exclusive = CASE WHEN excluded.exclusive != '' THEN excluded.exclusive ELSE set_parallels.exclusive END,
         notes = CASE WHEN excluded.notes != '' THEN excluded.notes ELSE set_parallels.notes END,
         serial_max = COALESCE(excluded.serial_max, set_parallels.serial_max),
         channels = CASE WHEN excluded.channels != '' THEN excluded.channels ELSE set_parallels.channels END,
-        variation_type = CASE WHEN excluded.variation_type != 'parallel' THEN excluded.variation_type ELSE set_parallels.variation_type END
+        variation_type = CASE WHEN excluded.variation_type != 'parallel' THEN excluded.variation_type ELSE set_parallels.variation_type END,
+        insert_type_id = COALESCE(excluded.insert_type_id, set_parallels.insert_type_id)
     `);
 
     const findUserInsertType = db.prepare('SELECT id FROM set_insert_types WHERE set_id = ? AND name = ?');
@@ -159,7 +160,7 @@ function mergeCatalog(db, opts = {}) {
         // Merge parallels
         const catParallels = catalogDb.prepare('SELECT * FROM set_parallels WHERE set_id = ?').all(catSet.id);
         for (const p of catParallels) {
-          upsertParallel.run(userSetId, p.name, p.print_run, p.exclusive, p.notes, p.serial_max, p.channels, p.variation_type);
+          upsertParallel.run(userSetId, p.name, p.print_run, p.exclusive, p.notes, p.serial_max, p.channels, p.variation_type, p.insert_type_id || null);
           results.parallels.added++;
         }
 

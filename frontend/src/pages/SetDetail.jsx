@@ -662,7 +662,7 @@ export default function SetDetail() {
         <div className="flex gap-3 mb-4">
           <div>
             <label className="text-xs text-cv-muted uppercase tracking-wider font-semibold block mb-1">Insert Type</label>
-            <select value={activeInsertType} onChange={e => setActiveInsertType(e.target.value)}
+            <select value={activeInsertType} onChange={e => { setActiveInsertType(e.target.value); setActiveParallel(''); }}
               className="bg-cv-panel border border-cv-border/50 rounded-lg px-3 py-2 text-sm text-cv-text focus:border-cv-accent focus:outline-none min-w-[160px]">
               {metadata.insertTypes.map(t => {
                 const prefix = t.section_type && t.section_type !== 'base'

@@ -197,6 +197,14 @@ function openDb(dbPath) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
   }
 
+  // Migration: scope parallels to specific insert types (NULL = base parallel)
+  const parallelScopeCols = [
+    'ALTER TABLE set_parallels ADD COLUMN insert_type_id INTEGER REFERENCES set_insert_types(id) ON DELETE SET NULL',
+  ];
+  for (const sql of parallelScopeCols) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+  }
+
   // Migration: per-set sync toggle
   const syncCols = [
     'ALTER TABLE card_sets ADD COLUMN sync_enabled INTEGER DEFAULT 1',
@@ -299,6 +307,9 @@ function openDb(dbPath) {
   // Migration: move existing cards with parallel != '' into card_parallels
   _migrateParallelCards(db);
 
+  // Migration: hierarchy data quality fixes (v2)
+  _migrateHierarchyFixV2(db);
+
   return db;
 }
 
@@ -372,6 +383,26 @@ function _seedHofPlayers(db) {
 }
 
 
+/**
+ * Delete a card_set and all dependent rows (cascade manually for tables
+ * that don't have ON DELETE CASCADE or need extra cleanup).
+ */
+function deleteSetCascade(db, setId) {
+  db.prepare('DELETE FROM price_history WHERE set_id = ?').run(setId);
+  db.prepare('DELETE FROM price_snapshots WHERE set_id = ?').run(setId);
+  db.prepare('DELETE FROM price_history WHERE card_id IN (SELECT id FROM cards WHERE set_id = ?)').run(setId);
+  db.prepare('DELETE FROM price_snapshots WHERE card_id IN (SELECT id FROM cards WHERE set_id = ?)').run(setId);
+  db.prepare('DELETE FROM tracked_cards WHERE card_id IN (SELECT id FROM cards WHERE set_id = ?)').run(setId);
+  db.prepare('DELETE FROM card_parallels WHERE card_id IN (SELECT id FROM cards WHERE set_id = ?)').run(setId);
+  db.prepare('DELETE FROM insert_type_parallels WHERE insert_type_id IN (SELECT id FROM set_insert_types WHERE set_id = ?)').run(setId);
+  db.prepare('DELETE FROM cards WHERE set_id = ?').run(setId);
+  db.prepare('DELETE FROM set_insert_types WHERE set_id = ?').run(setId);
+  db.prepare('DELETE FROM set_parallels WHERE set_id = ?').run(setId);
+  db.prepare('DELETE FROM voice_sessions WHERE set_id = ?').run(setId);
+  db.prepare('DELETE FROM card_sets WHERE id = ?').run(setId);
+}
+
+
 function getMeta(db, key) {
   const row = db.prepare('SELECT value FROM app_meta WHERE key = ?').get(key);
   return row ? row.value : null;
@@ -384,4 +415,246 @@ function setMeta(db, key, value) {
   ).run(key, value);
 }
 
-module.exports = { openDb, backupDb, getMeta, setMeta, DB_PATH, DB_DIR };
+/**
+ * Hierarchy Fix V2 — data quality cleanup migration.
+ * Fixes: phantom Base in inserts, empty Series shells, duplicate insert names,
+ * Chrome/Foil variant inserts → parallels, and scoping existing parallels.
+ * Idempotent — guarded by app_meta flag.
+ */
+function _migrateHierarchyFixV2(db) {
+  if (getMeta(db, 'hierarchy_fix_v2_done') === '1') return;
+
+  const { PARALLEL_KEYWORDS } = require('./parallel-keywords');
+
+  console.log('[Migration] Running hierarchy fix v2...');
+
+  const migrate = db.transaction(() => {
+    // ── Fix 4: Delete phantom "Base" entries from insert child sets ──
+    // These are 0-card "Base" insert types auto-created in insert child sets
+    let fix4 = 0;
+    try {
+      const result = db.prepare(`
+        DELETE FROM set_insert_types
+        WHERE name = 'Base' AND card_count = 0
+          AND set_id IN (SELECT id FROM card_sets WHERE set_type = 'insert')
+      `).run();
+      fix4 = result.changes;
+    } catch (_) {
+      // set_type column may not exist — skip silently
+    }
+    console.log(`[Migration]   Fix 4: Deleted ${fix4} phantom Base entries`);
+
+    // ── Fix 3: Merge empty Series shell sets into bloated parent ──
+    let fix3 = 0;
+    try {
+      const emptyShells = db.prepare(`
+        SELECT cs.* FROM card_sets cs
+        WHERE cs.total_cards = 0
+          AND (cs.name LIKE '% Series 1' OR cs.name LIKE '% Series 2')
+          AND EXISTS (SELECT 1 FROM card_sets ch WHERE ch.parent_set_id = cs.id)
+      `).all();
+
+      for (const shell of emptyShells) {
+        const baseName = shell.name.replace(/\s+Series\s+(1|2|One|Two)\s*$/i, '').trim();
+        const realParent = db.prepare(`
+          SELECT * FROM card_sets WHERE id != ? AND year = ? AND name = ? AND total_cards > 0
+          ORDER BY total_cards DESC LIMIT 1
+        `).get(shell.id, shell.year, baseName);
+
+        if (realParent) {
+          // Reassign children from shell to real parent
+          db.prepare('UPDATE card_sets SET parent_set_id = ? WHERE parent_set_id = ?')
+            .run(realParent.id, shell.id);
+
+          // Merge insert types from shell to real parent (skip duplicates)
+          const shellInserts = db.prepare('SELECT * FROM set_insert_types WHERE set_id = ?').all(shell.id);
+          for (const si of shellInserts) {
+            const exists = db.prepare('SELECT id FROM set_insert_types WHERE set_id = ? AND name = ?')
+              .get(realParent.id, si.name);
+            if (!exists) {
+              db.prepare('INSERT INTO set_insert_types (set_id, name, card_count, odds, section_type) VALUES (?, ?, ?, ?, ?)')
+                .run(realParent.id, si.name, si.card_count, si.odds, si.section_type);
+            }
+          }
+
+          // Merge parallels from shell to real parent (skip duplicates)
+          const shellParallels = db.prepare('SELECT * FROM set_parallels WHERE set_id = ?').all(shell.id);
+          for (const sp of shellParallels) {
+            const exists = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ?')
+              .get(realParent.id, sp.name);
+            if (!exists) {
+              db.prepare(`INSERT INTO set_parallels (set_id, name, print_run, exclusive, notes, serial_max, channels, variation_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(realParent.id, sp.name, sp.print_run, sp.exclusive, sp.notes, sp.serial_max, sp.channels, sp.variation_type);
+            }
+          }
+
+          // Delete empty shell
+          deleteSetCascade(db, shell.id);
+          fix3++;
+        }
+      }
+    } catch (_) {
+      // parent_set_id column may not exist — skip silently
+    }
+    console.log(`[Migration]   Fix 3: Merged ${fix3} empty Series shell sets`);
+
+    // ── Fix 6: Merge duplicate insert type names ──
+    // Normalize by removing "Topps", "Baseball", "Topps Baseball" tokens
+    function normalize(name) {
+      return name.replace(/\bTopps\s+Baseball\b/gi, '').replace(/\bTopps\b/gi, '')
+        .replace(/\bBaseball\b/gi, '').replace(/\s+/g, ' ').trim();
+    }
+
+    let fix6 = 0;
+    const allSets = db.prepare('SELECT id FROM card_sets').all();
+    for (const cs of allSets) {
+      const inserts = db.prepare('SELECT * FROM set_insert_types WHERE set_id = ? ORDER BY id').all(cs.id);
+      const groups = {};
+      for (const ins of inserts) {
+        const norm = normalize(ins.name);
+        if (!groups[norm]) groups[norm] = [];
+        groups[norm].push(ins);
+      }
+      for (const [, group] of Object.entries(groups)) {
+        if (group.length < 2) continue;
+        const keeper = group[0]; // keep the first occurrence
+        for (let i = 1; i < group.length; i++) {
+          const dupe = group[i];
+          // Update cards referencing the dupe insert type name
+          db.prepare('UPDATE cards SET insert_type = ? WHERE set_id = ? AND insert_type = ?')
+            .run(keeper.name, cs.id, dupe.name);
+          // Merge child set references if parent_set_id exists
+          try {
+            db.prepare('UPDATE card_sets SET parent_set_id = ? WHERE parent_set_id IN (SELECT id FROM card_sets WHERE name = ? AND year = ?)')
+              .run(cs.id, dupe.name, null); // best-effort
+          } catch (_) {}
+          // Take max card_count
+          if (dupe.card_count > keeper.card_count) {
+            db.prepare('UPDATE set_insert_types SET card_count = ? WHERE id = ?').run(dupe.card_count, keeper.id);
+          }
+          // Clean up pricing data for dupe
+          db.prepare('DELETE FROM price_snapshots WHERE insert_type_id = ?').run(dupe.id);
+          db.prepare('DELETE FROM price_history WHERE insert_type_id = ?').run(dupe.id);
+          // Migrate junction entries
+          db.prepare('UPDATE OR IGNORE insert_type_parallels SET insert_type_id = ? WHERE insert_type_id = ?')
+            .run(keeper.id, dupe.id);
+          db.prepare('DELETE FROM insert_type_parallels WHERE insert_type_id = ?').run(dupe.id);
+          // Delete the duplicate insert type
+          db.prepare('DELETE FROM set_insert_types WHERE id = ?').run(dupe.id);
+          fix6++;
+        }
+      }
+    }
+    console.log(`[Migration]   Fix 6: Merged ${fix6} duplicate insert type names`);
+
+    // ── Fix 2 + Fix 5: Convert Chrome/Foil variant inserts → parallels ──
+    let fix2 = 0;
+    for (const cs of allSets) {
+      const inserts = db.prepare('SELECT * FROM set_insert_types WHERE set_id = ? ORDER BY LENGTH(name) DESC, id')
+        .all(cs.id);
+      // Build map of name → insert (shortest-last so we can match against shorter names)
+      const insertByName = new Map();
+      // Insert in ascending length order so shortest names are in the map first
+      const byLenAsc = [...inserts].sort((a, b) => a.name.length - b.name.length);
+      for (const ins of byLenAsc) insertByName.set(ins.name, ins);
+
+      // Now iterate in descending length order (longest names first = most specific)
+      for (const ins of inserts) {
+        for (const [baseName, baseInsert] of insertByName) {
+          if (baseName === ins.name || !ins.name.startsWith(baseName + ' ')) continue;
+          const suffix = ins.name.slice(baseName.length + 1).trim();
+          const lower = suffix.toLowerCase();
+          const isParallel = PARALLEL_KEYWORDS.some(kw =>
+            lower === kw || lower.startsWith(kw + ' ') || lower.endsWith(' ' + kw) || lower.includes(kw)
+          );
+          if (isParallel) {
+            // 1. Upsert set_parallels with insert_type_id
+            const existingPar = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ?')
+              .get(cs.id, suffix);
+            if (existingPar) {
+              db.prepare('UPDATE set_parallels SET insert_type_id = ? WHERE id = ?')
+                .run(baseInsert.id, existingPar.id);
+            } else {
+              db.prepare(`INSERT INTO set_parallels (set_id, name, insert_type_id, variation_type)
+                VALUES (?, ?, ?, 'parallel')`)
+                .run(cs.id, suffix, baseInsert.id);
+            }
+
+            // 2. For each card with this insert_type, convert to base insert + parallel
+            const cardsToConvert = db.prepare(
+              'SELECT * FROM cards WHERE set_id = ? AND insert_type = ?'
+            ).all(cs.id, ins.name);
+
+            for (const card of cardsToConvert) {
+              // Check if base card exists
+              const baseCard = db.prepare(
+                "SELECT id FROM cards WHERE set_id = ? AND card_number = ? AND insert_type = ? AND parallel = ''"
+              ).get(cs.id, card.card_number, baseName);
+
+              if (!baseCard) {
+                // Create placeholder base card with qty=0
+                db.prepare(`INSERT INTO cards (set_id, card_number, player, team, rc_sp, insert_type, parallel, qty, image_path)
+                  VALUES (?, ?, ?, ?, ?, ?, '', 0, ?)`)
+                  .run(cs.id, card.card_number, card.player, card.team, card.rc_sp, baseName, card.image_path);
+              }
+
+              // Update card: change insert_type to base, set parallel to suffix
+              db.prepare('UPDATE cards SET insert_type = ?, parallel = ? WHERE id = ?')
+                .run(baseName, suffix, card.id);
+            }
+
+            // 3. Clean up pricing data for the old insert type
+            db.prepare('DELETE FROM price_snapshots WHERE insert_type_id = ?').run(ins.id);
+            db.prepare('DELETE FROM price_history WHERE insert_type_id = ?').run(ins.id);
+            db.prepare('DELETE FROM insert_type_parallels WHERE insert_type_id = ?').run(ins.id);
+
+            // 4. Delete the insert type
+            db.prepare('DELETE FROM set_insert_types WHERE id = ?').run(ins.id);
+            insertByName.delete(ins.name);
+            fix2++;
+            break; // matched — move to next insert
+          }
+        }
+      }
+    }
+    console.log(`[Migration]   Fix 2+5: Converted ${fix2} variant inserts to parallels`);
+
+    // ── Fix 1: Scope existing insert-prefixed parallels ──
+    let fix1 = 0;
+    const allParallels = db.prepare(`
+      SELECT sp.id, sp.set_id, sp.name, sit.id as found_insert_type_id, sit.name as insert_name
+      FROM set_parallels sp
+      JOIN set_insert_types sit ON sit.set_id = sp.set_id
+      WHERE sp.insert_type_id IS NULL AND sp.name LIKE sit.name || ' %'
+      ORDER BY LENGTH(sit.name) DESC
+    `).all();
+
+    const processed = new Set();
+    for (const row of allParallels) {
+      if (processed.has(row.id)) continue;
+      processed.add(row.id);
+
+      const suffix = row.name.slice(row.insert_name.length + 1).trim();
+      if (!suffix) continue;
+
+      // Rename parallel to just the suffix and set insert_type_id
+      db.prepare('UPDATE set_parallels SET name = ?, insert_type_id = ? WHERE id = ?')
+        .run(suffix, row.found_insert_type_id, row.id);
+
+      // Update cards.parallel to match the new short name
+      db.prepare('UPDATE cards SET parallel = ? WHERE set_id = ? AND parallel = ?')
+        .run(suffix, row.set_id, row.name);
+
+      fix1++;
+    }
+    console.log(`[Migration]   Fix 1: Scoped ${fix1} insert-prefixed parallels`);
+  });
+
+  migrate();
+  setMeta(db, 'hierarchy_fix_v2_done', '1');
+  console.log('[Migration] Hierarchy fix v2 complete');
+}
+
+
+module.exports = { openDb, backupDb, getMeta, setMeta, deleteSetCascade, DB_PATH, DB_DIR };
