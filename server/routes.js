@@ -19,18 +19,44 @@ function createRoutes(db) {
   // Set Endpoints
   // ============================================================
 
-  // GET /api/sets — list all sets (with owned/qty summary)
+  // GET /api/sets — list all sets (with tracked-only owned/qty summary)
   router.get('/api/sets', (_req, res) => {
     const sets = db.prepare(
       `SELECT cs.id, cs.name, cs.year, cs.brand, cs.sport, cs.total_cards,
-        COALESCE(SUM(CASE WHEN c.qty > 0 THEN 1 ELSE 0 END), 0) as owned_count,
-        COALESCE(SUM(c.qty), 0) as total_qty,
-        (SELECT COUNT(*) FROM set_insert_types WHERE set_id = cs.id) as section_count
+         (SELECT COUNT(*) FROM set_insert_types WHERE set_id = cs.id) as insert_count,
+         (SELECT COUNT(*) FROM set_parallels WHERE set_id = cs.id) as parallel_count,
+         (SELECT COALESCE(SUM(card_count), 0) FROM set_insert_types WHERE set_id = cs.id) as total_all_cards
        FROM card_sets cs
-       LEFT JOIN cards c ON c.set_id = cs.id
-       GROUP BY cs.id
        ORDER BY cs.year DESC, cs.name`
     ).all();
+
+    const trackedStatsStmt = db.prepare(
+      `SELECT COALESCE(SUM(sit.card_count), 0) as tracked_total
+       FROM set_insert_types sit WHERE sit.set_id = ? AND sit.tracked = 1`
+    );
+    const trackedOwnedStmt = db.prepare(
+      `SELECT COUNT(*) as owned_count, COALESCE(SUM(c.qty), 0) as total_qty
+       FROM cards c
+       JOIN set_insert_types sit ON sit.set_id = c.set_id AND sit.name = c.insert_type
+       WHERE c.set_id = ? AND sit.tracked = 1 AND c.qty > 0`
+    );
+    const trackedInsertsStmt = db.prepare(
+      `SELECT sit.id, sit.name, sit.card_count,
+         (SELECT COUNT(*) FROM cards c WHERE c.set_id = sit.set_id AND c.insert_type = sit.name AND c.qty > 0) as owned_count
+       FROM set_insert_types sit
+       WHERE sit.set_id = ? AND sit.tracked = 1
+       ORDER BY sit.id`
+    );
+
+    for (const s of sets) {
+      const ts = trackedStatsStmt.get(s.id);
+      const to = trackedOwnedStmt.get(s.id);
+      s.tracked_total = ts.tracked_total;
+      s.owned_count = to.owned_count;
+      s.total_qty = to.total_qty;
+      s.tracked_inserts = trackedInsertsStmt.all(s.id);
+    }
+
     res.json(sets);
   });
 
