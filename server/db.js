@@ -251,6 +251,26 @@ function openDb(dbPath) {
   // Set tracked = 1 for all Base insert types
   db.prepare("UPDATE set_insert_types SET tracked = 1 WHERE name = 'Base' AND tracked = 0").run();
 
+  // Migration: scrape queue for batch TCDB import
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scrape_queue (
+      id INTEGER PRIMARY KEY,
+      priority INTEGER,
+      year INTEGER,
+      brand TEXT,
+      set_name TEXT,
+      tcdb_search TEXT,
+      tcdb_set_id INTEGER,
+      status TEXT DEFAULT 'pending',
+      scraped_data TEXT,
+      catalog_path TEXT,
+      error_message TEXT,
+      card_set_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // Pricing indexes
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_card ON price_history(card_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_price_history_set ON price_history(set_id)`); } catch(e) {}
