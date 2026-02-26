@@ -1405,7 +1405,7 @@ function createRoutes(db) {
     const it = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(itId);
     if (!it) return res.status(404).json({ detail: 'Insert type not found' });
 
-    const { name, card_count, odds, section_type } = req.body;
+    const { name, card_count, odds, section_type, tracked } = req.body;
     const oldName = it.name;
 
     if (name !== undefined && name.trim()) {
@@ -1424,6 +1424,7 @@ function createRoutes(db) {
     if (card_count !== undefined) db.prepare('UPDATE set_insert_types SET card_count = ? WHERE id = ?').run(card_count, itId);
     if (odds !== undefined) db.prepare('UPDATE set_insert_types SET odds = ? WHERE id = ?').run(odds, itId);
     if (section_type !== undefined) db.prepare('UPDATE set_insert_types SET section_type = ? WHERE id = ?').run(section_type, itId);
+    if (tracked !== undefined) db.prepare('UPDATE set_insert_types SET tracked = ? WHERE id = ?').run(tracked ? 1 : 0, itId);
 
     const updated = db.prepare('SELECT * FROM set_insert_types WHERE id = ?').get(itId);
     res.json(updated);
