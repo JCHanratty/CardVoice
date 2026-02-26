@@ -327,7 +327,8 @@ export default function AdminPage() {
   const submitQueueJson = async () => {
     try {
       const parsed = JSON.parse(queueJsonInput);
-      await axios.post(`${API}/api/admin/tcdb/scrape-queue`, { items: Array.isArray(parsed) ? parsed : parsed.items || [parsed] });
+      const items = Array.isArray(parsed) ? parsed : parsed.sets || parsed.items || [parsed];
+      await axios.post(`${API}/api/admin/tcdb/scrape-queue`, { items });
       setQueueJsonInput('');
       setShowQueueLoad(false);
       loadScrapeQueue();

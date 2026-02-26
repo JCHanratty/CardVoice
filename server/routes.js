@@ -2146,8 +2146,9 @@ function createRoutes(db) {
   // POST /api/admin/tcdb/scrape-queue — load queue from JSON array
   router.post('/api/admin/tcdb/scrape-queue', (req, res) => {
     const processor = req.app.locals.scrapeQueueProcessor;
-    processor.loadQueue(req.body);
-    res.json({ loaded: req.body.length });
+    const items = Array.isArray(req.body) ? req.body : req.body.items || req.body.sets || [];
+    processor.loadQueue(items);
+    res.json({ loaded: items.length });
   });
 
   // GET /api/admin/tcdb/scrape-queue — list all queue items
