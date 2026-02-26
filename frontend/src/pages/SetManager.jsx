@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Trash2, Upload, Mic, ExternalLink, Database, Loader2, ChevronDown, ChevronRight, LayoutGrid, List, MoreHorizontal } from 'lucide-react';
+import { Plus, Trash2, Upload, Mic, ExternalLink, Database, Loader2, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react';
 import axios from 'axios';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -10,7 +10,9 @@ export default function SetManager() {
   const [importing, setImporting] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [collapsedYears, setCollapsedYears] = useState(null);
-  const [viewMode, setViewMode] = useState('grid');
+  const [showEmpty, setShowEmpty] = useState(false);
+  const [expandedSets, setExpandedSets] = useState({});
+  const [activeMenu, setActiveMenu] = useState(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [hasCardVision, setHasCardVision] = useState(false);
 
@@ -35,6 +37,23 @@ export default function SetManager() {
       window.removeEventListener('menu-import-cardvision', handleImportCV);
     };
   }, []);
+
+  // Persist collapsedYears to localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('cv-collapsed-years');
+    if (saved) try { setCollapsedYears(JSON.parse(saved)); } catch {}
+  }, []);
+  useEffect(() => {
+    if (collapsedYears) localStorage.setItem('cv-collapsed-years', JSON.stringify(collapsedYears));
+  }, [collapsedYears]);
+
+  // Close overflow menu on outside click
+  useEffect(() => {
+    if (!activeMenu) return;
+    const handler = () => setActiveMenu(null);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [activeMenu]);
 
   const loadSets = () => {
     axios.get(`${API}/api/sets`).then(r => setSets(r.data)).catch(console.error);
@@ -126,27 +145,36 @@ export default function SetManager() {
     setMigrating(false);
   };
 
-  // Group sets by year, sorted descending
+  // Group sets into Year > Brand > Set tree
   const grouped = useMemo(() => {
-    const map = {};
-    sets.forEach(s => {
+    const visible = showEmpty ? sets : sets.filter(s => s.total_cards > 0 || s.owned_count > 0);
+    const tree = {};
+    visible.forEach(s => {
       const yr = s.year || 'Other';
-      if (!map[yr]) map[yr] = [];
-      map[yr].push(s);
+      const br = s.brand || 'Unknown';
+      if (!tree[yr]) tree[yr] = {};
+      if (!tree[yr][br]) tree[yr][br] = [];
+      tree[yr][br].push(s);
     });
-    // Sort years descending, "Other" last
-    return Object.entries(map).sort((a, b) => {
-      if (a[0] === 'Other') return 1;
-      if (b[0] === 'Other') return -1;
-      return Number(b[0]) - Number(a[0]);
-    });
-  }, [sets]);
+    return Object.entries(tree)
+      .sort((a, b) => {
+        if (a[0] === 'Other') return 1;
+        if (b[0] === 'Other') return -1;
+        return Number(b[0]) - Number(a[0]);
+      })
+      .map(([yr, brands]) => ({
+        year: yr,
+        brands: Object.entries(brands)
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([brand, sets]) => ({ brand, sets })),
+      }));
+  }, [sets, showEmpty]);
 
   // Default all years to expanded on first load
   useEffect(() => {
     if (grouped.length > 0 && collapsedYears === null) {
       const all = {};
-      grouped.forEach(([yr]) => { all[yr] = false; });
+      grouped.forEach(g => { all[g.year] = false; });
       setCollapsedYears(all);
     }
   }, [grouped, collapsedYears]);
@@ -156,7 +184,8 @@ export default function SetManager() {
   };
 
   // Totals
-  const totalCards = sets.reduce((a, s) => a + (s.total_cards || 0), 0);
+  const totalSets = sets.length;
+  const totalTracked = sets.reduce((a, s) => a + (s.tracked_total || 0), 0);
   const totalOwned = sets.reduce((a, s) => a + (s.owned_count || 0), 0);
 
   return (
@@ -166,7 +195,7 @@ export default function SetManager() {
         <div>
           <h2 className="text-2xl font-display font-bold text-cv-text">My Sets</h2>
           <p className="text-sm text-cv-muted mt-1">
-            {sets.length} set{sets.length !== 1 ? 's' : ''} · {totalCards.toLocaleString()} cards · {totalOwned.toLocaleString()} owned
+            {totalSets} set{totalSets !== 1 ? 's' : ''} · {totalTracked.toLocaleString()} tracked · {totalOwned.toLocaleString()} owned
             <span className="mx-2 text-cv-border">|</span>
             <a
               href="https://github.com/JCHanratty/CardVoice/issues/new?template=set-request.yml"
@@ -179,22 +208,16 @@ export default function SetManager() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center bg-cv-panel border border-cv-border/50 rounded-lg overflow-hidden mr-1">
-            <button
-              onClick={() => setViewMode('grid')}
-              className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-cv-accent/15 text-cv-accent' : 'text-cv-muted hover:text-cv-text'}`}
-              title="Grid view"
-            >
-              <LayoutGrid size={16} />
-            </button>
-            <button
-              onClick={() => setViewMode('list')}
-              className={`p-2 transition-colors ${viewMode === 'list' ? 'bg-cv-accent/15 text-cv-accent' : 'text-cv-muted hover:text-cv-text'}`}
-              title="List view"
-            >
-              <List size={16} />
-            </button>
-          </div>
+          {/* Show empty toggle */}
+          <label className="flex items-center gap-1.5 text-xs text-cv-muted cursor-pointer select-none mr-2">
+            <input
+              type="checkbox"
+              checked={showEmpty}
+              onChange={(e) => setShowEmpty(e.target.checked)}
+              className="rounded border-cv-border bg-cv-dark text-cv-accent focus:ring-cv-accent/30 w-3.5 h-3.5"
+            />
+            Show empty
+          </label>
           {/* Show prominent CardVision button only when no sets exist and CardVision is installed */}
           {hasCardVision && sets.length === 0 && (
             <button onClick={migrateFromCardVision} disabled={migrating}
@@ -242,7 +265,7 @@ export default function SetManager() {
         </div>
       </div>
 
-      {/* Sets by Year */}
+      {/* Sets Tree */}
       {sets.length === 0 ? (
         <div className="bg-cv-panel rounded-xl border border-cv-border p-12 text-center">
           <Database size={48} className="text-cv-muted/50 mx-auto mb-4" />
@@ -253,17 +276,19 @@ export default function SetManager() {
           </Link>
         </div>
       ) : (
-        <div className="space-y-6">
-          {grouped.map(([year, yearSets]) => {
+        <div className="space-y-4">
+          {grouped.map(({ year, brands }) => {
             const collapsed = collapsedYears ? !!collapsedYears[year] : false;
-            const yearCards = yearSets.reduce((a, s) => a + (s.total_cards || 0), 0);
+            const yearSets = brands.flatMap(b => b.sets);
+            const yearTracked = yearSets.reduce((a, s) => a + (s.tracked_total || 0), 0);
             const yearOwned = yearSets.reduce((a, s) => a + (s.owned_count || 0), 0);
-            const pct = yearCards > 0 ? Math.round((yearOwned / yearCards) * 100) : 0;
+            const pct = yearTracked > 0 ? Math.round((yearOwned / yearTracked) * 100) : 0;
+
             return (
               <div key={year}>
                 {/* Year Header */}
                 <button onClick={() => toggleYear(year)}
-                  className="w-full mb-3 group text-left bg-cv-panel/60 rounded-xl border border-cv-border/30 px-4 py-3 hover:border-cv-accent/30 transition-all">
+                  className="w-full mb-2 group text-left bg-cv-panel/60 rounded-xl border border-cv-border/30 px-4 py-3 hover:border-cv-accent/30 transition-all">
                   <div className="flex items-center gap-3">
                     {collapsed
                       ? <ChevronRight size={18} className="text-cv-muted group-hover:text-cv-accent transition-colors shrink-0" />
@@ -271,159 +296,118 @@ export default function SetManager() {
                     }
                     <span className="text-xl font-bold text-cv-text group-hover:text-cv-accent transition-colors">{year}</span>
                     <span className="text-xs text-cv-muted">
-                      {yearSets.length} set{yearSets.length !== 1 ? 's' : ''} · {yearCards.toLocaleString()} cards · {yearOwned.toLocaleString()} owned
+                      {yearSets.length} set{yearSets.length !== 1 ? 's' : ''}
                     </span>
                     <div className="ml-auto flex items-center gap-2.5">
                       <div className="w-48 h-1.5 bg-cv-border/50 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full" style={{ width: `${pct}%` }} />
+                        <div className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full transition-all" style={{ width: `${pct}%` }} />
                       </div>
                       <span className="text-xs font-mono text-cv-accent">{pct}%</span>
+                      <span className="text-xs text-cv-muted font-mono">{yearOwned}/{yearTracked}</span>
                     </div>
                   </div>
                 </button>
 
-                {/* Year Sets Grid */}
-                {!collapsed && viewMode === 'grid' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                    {yearSets.map(s => {
-                      const ownPct = s.total_cards > 0 ? Math.round(((s.owned_count || 0) / s.total_cards) * 100) : 0;
+                {/* Brands within year */}
+                {!collapsed && brands.map(({ brand, sets: brandSets }) => (
+                  <div key={brand} className="ml-4 mb-3">
+                    {/* Brand heading - only show if multiple brands in year */}
+                    {brands.length > 1 && (
+                      <div className="px-3 py-1.5 text-xs font-semibold text-cv-muted uppercase tracking-wider">
+                        {brand}
+                      </div>
+                    )}
+
+                    {/* Sets within brand */}
+                    {brandSets.map(s => {
+                      const setPct = s.tracked_total > 0 ? Math.round((s.owned_count / s.tracked_total) * 100) : 0;
+                      const isEmpty = s.total_cards === 0 && s.owned_count === 0;
+                      const isExpanded = !!expandedSets[s.id];
+
                       return (
-                        <div key={s.id}
-                          className="group bg-cv-panel rounded-xl border border-cv-border/70 p-4 hover:border-cv-accent/40 glow-burgundy transition-all duration-200 flex flex-col relative overflow-hidden">
-                          {/* Subtle top accent line */}
-                          <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cv-accent/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-
-                          <div className="flex-1">
-                            <div className="flex items-start justify-between">
-                              <Link to={`/sets/${s.id}`} className="text-cv-text font-semibold hover:text-cv-accent transition-colors leading-tight">
-                                {s.name}
-                              </Link>
-                              {s.brand && (
-                                <span className="text-xs px-2 py-0.5 rounded-full bg-cv-accent2/10 text-cv-accent2 border border-cv-accent2/20 ml-2 shrink-0">
-                                  {s.brand}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Stats Row */}
-                            <div className="mt-3 flex items-center gap-4 text-xs">
-                              <div>
-                                <span className="text-cv-text font-mono font-bold text-base">{s.total_cards}</span>
-                                <span className="text-cv-muted ml-1">cards</span>
-                              </div>
-                              {s.section_count > 0 && (
-                                <div>
-                                  <span className="text-cv-accent2 font-mono font-bold text-base">{s.section_count}</span>
-                                  <span className="text-cv-muted ml-1">sections</span>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Owned Progress */}
-                            {s.total_cards > 0 && (
-                              <div className="mt-3">
-                                <div className="flex items-center justify-between text-xs mb-1">
-                                  <span className="text-cv-muted">
-                                    <span className="text-cv-accent font-semibold">{s.owned_count || 0}</span>/{s.total_cards} owned
-                                  </span>
-                                  <span className="font-mono text-cv-accent font-bold">{ownPct}%</span>
-                                </div>
-                                <div className="progress-bar">
-                                  <div className="progress-bar-fill" style={{ width: `${ownPct}%` }} />
-                                </div>
-                                {(s.total_qty > 0) && (
-                                  <div className="text-xs text-cv-muted mt-1">
-                                    <span className="text-cv-gold font-semibold font-mono">{s.total_qty}</span> total qty
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Action Buttons */}
-                          <div className="flex items-center justify-between mt-3 pt-3 border-t border-cv-border/50">
-                            <div className="flex items-center gap-2">
-                              <Link to={`/voice/${s.id}`}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-cv-accent/10 text-cv-accent hover:bg-cv-accent/20 transition-all font-medium">
-                                <Mic size={12} /> Voice
-                              </Link>
-                              <Link to={`/sets/${s.id}`}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-white/5 border border-cv-border/50 text-cv-text hover:bg-white/10 transition-all">
-                                <ExternalLink size={12} /> View
-                              </Link>
-                            </div>
-                            <button onClick={() => deleteSet(s.id, s.name)}
-                              className="p-1.5 rounded-lg text-cv-muted/40 hover:text-cv-red hover:bg-cv-red/10 transition-all">
-                              <Trash2 size={14} />
+                        <div key={s.id} className={`ml-2 ${isEmpty ? 'opacity-40' : ''}`}>
+                          {/* Set row */}
+                          <div className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors group">
+                            {/* Expand chevron for tracked inserts */}
+                            <button onClick={() => setExpandedSets(prev => ({ ...prev, [s.id]: !prev[s.id] }))}
+                              className="text-cv-muted hover:text-cv-text transition-colors p-0.5 shrink-0">
+                              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                             </button>
+
+                            {/* Set name */}
+                            <Link to={`/sets/${s.id}`} className="flex-1 min-w-0 text-sm font-medium text-cv-text hover:text-cv-accent transition-colors truncate">
+                              {s.name}
+                            </Link>
+
+                            {/* Progress bar */}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="w-32 h-1.5 bg-cv-dark/50 rounded-full overflow-hidden">
+                                <div className="h-full bg-cv-accent rounded-full transition-all" style={{ width: `${setPct}%` }} />
+                              </div>
+                              <span className="text-xs text-cv-muted font-mono w-10 text-right">{setPct}%</span>
+                              <span className="text-xs text-cv-muted font-mono w-20 text-right">{s.owned_count}/{s.tracked_total}</span>
+                            </div>
+
+                            {/* Overflow menu */}
+                            <div className="relative shrink-0">
+                              <button onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === s.id ? null : s.id); }}
+                                className="p-1 rounded text-cv-muted/30 hover:text-cv-muted hover:bg-white/5 transition-all opacity-0 group-hover:opacity-100">
+                                <MoreHorizontal size={14} />
+                              </button>
+                              {activeMenu === s.id && (
+                                <div className="absolute right-0 top-full mt-1 bg-cv-panel border border-cv-border/50 rounded-lg shadow-lg z-20 py-1 w-36">
+                                  <Link to={`/voice/${s.id}`} onClick={() => setActiveMenu(null)}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-cv-text hover:bg-white/5">
+                                    <Mic size={12} /> Voice Entry
+                                  </Link>
+                                  <Link to={`/sets/${s.id}`} onClick={() => setActiveMenu(null)}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-cv-text hover:bg-white/5">
+                                    <ExternalLink size={12} /> View Set
+                                  </Link>
+                                  <button onClick={() => { deleteSet(s.id, s.name); setActiveMenu(null); }}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-cv-red hover:bg-cv-red/10 w-full text-left">
+                                    <Trash2 size={12} /> Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
+
+                          {/* Info line */}
+                          <div className="ml-9 -mt-1 mb-1 text-[11px] text-cv-muted">
+                            {s.insert_count} inserts · {s.parallel_count} parallels · {(s.total_all_cards || 0).toLocaleString()} total cards
+                          </div>
+
+                          {/* Expanded: tracked inserts */}
+                          {isExpanded && (
+                            <div className="ml-9 mb-2 space-y-1">
+                              {(s.tracked_inserts || []).map(ti => {
+                                const tiPct = ti.card_count > 0 ? Math.round((ti.owned_count / ti.card_count) * 100) : 0;
+                                return (
+                                  <div key={ti.id} className="flex items-center gap-2 px-3 py-1 rounded bg-white/[0.02]">
+                                    <span className="text-xs text-cv-text flex-1 truncate">{ti.name}</span>
+                                    <div className="w-24 h-1 bg-cv-dark/50 rounded-full overflow-hidden">
+                                      <div className="h-full bg-cv-accent/60 rounded-full" style={{ width: `${tiPct}%` }} />
+                                    </div>
+                                    <span className="text-[11px] text-cv-muted font-mono w-8 text-right">{tiPct}%</span>
+                                    <span className="text-[11px] text-cv-muted font-mono">{ti.owned_count}/{ti.card_count}</span>
+                                  </div>
+                                );
+                              })}
+                              {(s.tracked_inserts || []).length === 0 && (
+                                <div className="px-3 py-1 text-xs text-cv-muted italic">No tracked inserts</div>
+                              )}
+                              <Link to={`/sets/${s.id}`}
+                                className="block px-3 py-1 text-xs text-cv-accent hover:text-cv-accent/80 transition-colors font-medium">
+                                View All Inserts &rarr;
+                              </Link>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
-                )}
-
-                {!collapsed && viewMode === 'list' && (
-                  <div className="bg-cv-panel rounded-xl border border-cv-border/50 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-cv-border/30">
-                          <th className="text-left py-2.5 px-4 text-xs text-cv-muted uppercase font-semibold">Name</th>
-                          <th className="text-left py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-20">Brand</th>
-                          <th className="text-center py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-20">Cards</th>
-                          <th className="text-left py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-44">Progress</th>
-                          <th className="text-center py-2.5 px-3 text-xs text-cv-muted uppercase font-semibold w-24">Owned</th>
-                          <th className="w-24"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {yearSets.map(s => {
-                          const ownPct = s.total_cards > 0 ? Math.round(((s.owned_count || 0) / s.total_cards) * 100) : 0;
-                          return (
-                            <tr key={s.id} className="group border-b border-cv-border/20 hover:bg-white/[0.03] transition-colors">
-                              <td className="py-2.5 px-4">
-                                <Link to={`/sets/${s.id}`} className="text-cv-text font-semibold hover:text-cv-accent transition-colors">
-                                  {s.name}
-                                </Link>
-                              </td>
-                              <td className="py-2.5 px-3">
-                                {s.brand && (
-                                  <span className="text-xs px-2 py-0.5 rounded-full bg-cv-accent2/10 text-cv-accent2 border border-cv-accent2/20">
-                                    {s.brand}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-cv-muted font-mono">{s.total_cards}</td>
-                              <td className="py-2.5 px-3">
-                                <div className="flex items-center gap-2">
-                                  <div className="flex-1 h-1.5 bg-cv-border/50 rounded-full overflow-hidden">
-                                    <div className="h-full bg-gradient-to-r from-cv-accent to-cv-gold rounded-full" style={{ width: `${ownPct}%` }} />
-                                  </div>
-                                  <span className="text-xs font-mono text-cv-accent w-8 text-right">{ownPct}%</span>
-                                </div>
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-cv-muted font-mono">{s.owned_count || 0}/{s.total_cards}</td>
-                              <td className="py-2.5 px-3">
-                                <div className="flex items-center gap-1 justify-end">
-                                  <Link to={`/voice/${s.id}`} className="p-1.5 rounded-lg text-cv-accent hover:bg-cv-accent/10 transition-all" title="Voice entry">
-                                    <Mic size={14} />
-                                  </Link>
-                                  <Link to={`/sets/${s.id}`} className="p-1.5 rounded-lg text-cv-text hover:bg-white/10 transition-all" title="View set">
-                                    <ExternalLink size={14} />
-                                  </Link>
-                                  <button onClick={() => deleteSet(s.id, s.name)}
-                                    className="p-1.5 rounded-lg text-cv-muted/50 hover:text-cv-red hover:bg-cv-red/10 transition-all" title="Delete">
-                                    <Trash2 size={14} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                ))}
               </div>
             );
           })}
