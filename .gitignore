@@ -24,3 +24,4 @@ backend/
 
 # Git worktrees
 .worktrees/
+.worktrees
