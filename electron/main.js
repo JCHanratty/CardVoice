@@ -7,6 +7,7 @@ const { autoUpdater } = require('electron-updater');
 let mainWindow;
 let serverHandle; // { app, server, db } from createServer()
 let downloadedInstallerPath = null; // Cached path from electron-updater
+let isUpdating = false; // True once quitAndInstall starts — prevents race with app.quit()
 const BACKEND_PORT = 8000;
 
 // ============================================================
@@ -60,6 +61,23 @@ function cleanupUpdateArtifacts() {
       console.log('[Update] Cleaned up update artifacts');
     } catch (e) {
       console.warn('[Update] Could not clean update artifacts:', e.message);
+    }
+  }
+
+  // Clear stale electron-updater cache (pending downloads from failed installs)
+  // Without this, a failed quitAndInstall leaves a cached installer that blocks
+  // future update checks from discovering newer versions.
+  // Check both old (cardvoice-updater) and new (CardVoice-updater) cache dir names.
+  const appDataLocal = path.join(app.getPath('userData'), '..');
+  for (const dirName of ['cardvoice-updater', 'CardVoice-updater']) {
+    const pendingDir = path.join(appDataLocal, dirName, 'pending');
+    if (fs.existsSync(pendingDir)) {
+      try {
+        fs.rmSync(pendingDir, { recursive: true, force: true });
+        console.log(`[Update] Cleared stale pending cache in ${dirName}`);
+      } catch (e) {
+        console.warn(`[Update] Could not clear pending cache in ${dirName}:`, e.message);
+      }
     }
   }
 }
@@ -148,22 +166,23 @@ function setupAutoUpdater() {
 }
 
 /**
- * Quit-and-install: close everything cleanly, then let electron-updater
- * handle the NSIS installer with its built-in quitAndInstall().
+ * Quit-and-install: let electron-updater handle the full sequence.
  *
- * Previous custom approaches (bat/vbs scripts, direct spawn with /S)
- * all failed because NSIS silent mode (/S) exits with code 1 —
- * it removes the old install but never writes the new one.
+ * CRITICAL: Do NOT manually close the window or call app.quit() before
+ * autoUpdater.quitAndInstall(). Doing so triggers window-all-closed →
+ * app.quit(), which races with the updater's own quit sequence. The result:
+ * NSIS uninstalls the old version, but Electron dies before NSIS finishes
+ * writing the new one → empty install directory, broken app.
  *
- * The fix: don't use /S. Let electron-updater run the oneClick installer
- * normally. The user sees a brief install progress bar (a few seconds),
- * then the app relaunches. This is reliable and better UX than the app
- * just vanishing.
+ * Instead: set isUpdating flag (prevents window-all-closed from quitting),
+ * release server file locks, then let quitAndInstall() handle window
+ * closing, app quitting, and NSIS spawning in the correct order.
  */
 function quitAndInstallViaScript() {
   console.log('[Update] Starting quit-and-install...');
+  isUpdating = true;
 
-  // 1. Close server and DB first to release all file locks
+  // Release server/DB file locks so NSIS can overwrite resources
   if (serverHandle) {
     try { serverHandle.server.close(); } catch (e) {}
     try { serverHandle.db.close(); } catch (e) {}
@@ -171,16 +190,8 @@ function quitAndInstallViaScript() {
     console.log('[Update] Server and DB closed');
   }
 
-  // 2. Close the window so Electron doesn't block
-  if (mainWindow) {
-    mainWindow.removeAllListeners('close');
-    mainWindow.close();
-    mainWindow = null;
-  }
-
-  // 3. Let electron-updater handle it: isSilent=false, isForceRunAfter=true
-  //    This runs the NSIS oneClick installer with its normal UI (brief progress bar)
-  //    and relaunches the app when done.
+  // Let electron-updater handle everything: isSilent=false, isForceRunAfter=true
+  // It will close windows, quit the app, and spawn the NSIS installer in the right order.
   console.log('[Update] Calling autoUpdater.quitAndInstall(false, true)...');
   autoUpdater.quitAndInstall(false, true);
 }
@@ -409,10 +420,12 @@ function shutdownServer() {
 }
 
 app.on('window-all-closed', () => {
+  if (isUpdating) return; // Let autoUpdater.quitAndInstall() handle the quit sequence
   shutdownServer();
   app.quit();
 });
 
 app.on('before-quit', () => {
+  if (isUpdating) return; // Server already closed in quitAndInstallViaScript()
   shutdownServer();
 });
