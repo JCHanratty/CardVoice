@@ -6,6 +6,7 @@ const { Router } = require('express');
 const { backupDb } = require('./db');
 const { parseSpokenNumbers, parseCardQuantities, countCards, formatOutput } = require('./parser');
 const { parseChecklist, parsePastedChecklist } = require('./hardened-parser');
+const { ScrapeQueueProcessor } = require('./scrape-queue');
 
 /**
  * Build an Express router bound to the given better-sqlite3 instance.
@@ -2136,6 +2137,124 @@ function createRoutes(db) {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ============================================================
+  // Scrape Queue Endpoints
+  // ============================================================
+
+  // POST /api/admin/tcdb/scrape-queue — load queue from JSON array
+  router.post('/api/admin/tcdb/scrape-queue', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.loadQueue(req.body);
+    res.json({ loaded: req.body.length });
+  });
+
+  // GET /api/admin/tcdb/scrape-queue — list all queue items
+  router.get('/api/admin/tcdb/scrape-queue', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    res.json(processor.getQueue());
+  });
+
+  // GET /api/admin/tcdb/scrape-queue/status — polling endpoint for progress
+  router.get('/api/admin/tcdb/scrape-queue/status', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    res.json(processor.getStatus());
+  });
+
+  // POST /api/admin/tcdb/scrape-queue/start — begin processing
+  router.post('/api/admin/tcdb/scrape-queue/start', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.start().catch(err => {
+      console.error('[ScrapeQueue] Processing error:', err.message);
+    });
+    res.json({ started: true });
+  });
+
+  // POST /api/admin/tcdb/scrape-queue/stop — pause after current item
+  router.post('/api/admin/tcdb/scrape-queue/stop', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.stop();
+    res.json({ stopped: true });
+  });
+
+  // DELETE /api/admin/tcdb/scrape-queue/clear — remove all items
+  router.delete('/api/admin/tcdb/scrape-queue/clear', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.clearQueue();
+    res.json({ cleared: true });
+  });
+
+  // POST /api/admin/tcdb/scrape-queue/import-all — batch import all scraped
+  router.post('/api/admin/tcdb/scrape-queue/import-all', (req, res) => {
+    try {
+      const processor = req.app.locals.scrapeQueueProcessor;
+      const results = processor.importAllScraped();
+      res.json(results);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE /api/admin/tcdb/scrape-queue/:id — remove single item
+  router.delete('/api/admin/tcdb/scrape-queue/:id', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.deleteItem(Number(req.params.id));
+    res.json({ deleted: true });
+  });
+
+  // GET /api/admin/tcdb/scrape-queue/:id/preview — get scraped_data JSON
+  router.get('/api/admin/tcdb/scrape-queue/:id/preview', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    const item = processor.getItem(Number(req.params.id));
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    const data = item.scraped_data ? JSON.parse(item.scraped_data) : null;
+    res.json(data);
+  });
+
+  // PUT /api/admin/tcdb/scrape-queue/:id/edit — apply operations to catalog.db
+  router.put('/api/admin/tcdb/scrape-queue/:id/edit', (req, res) => {
+    try {
+      const processor = req.app.locals.scrapeQueueProcessor;
+      processor.applyEdits(Number(req.params.id), req.body.operations || []);
+      const item = processor.getItem(Number(req.params.id));
+      const data = item.scraped_data ? JSON.parse(item.scraped_data) : null;
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // PUT /api/admin/tcdb/scrape-queue/:id/assign — set tcdb_set_id manually
+  router.put('/api/admin/tcdb/scrape-queue/:id/assign', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.assignSetId(Number(req.params.id), req.body.tcdb_set_id);
+    res.json({ assigned: true });
+  });
+
+  // POST /api/admin/tcdb/scrape-queue/:id/import — import single item
+  router.post('/api/admin/tcdb/scrape-queue/:id/import', (req, res) => {
+    try {
+      const processor = req.app.locals.scrapeQueueProcessor;
+      const result = processor.importItem(Number(req.params.id));
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/tcdb/scrape-queue/:id/skip — mark skipped
+  router.post('/api/admin/tcdb/scrape-queue/:id/skip', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.skipItem(Number(req.params.id));
+    res.json({ skipped: true });
+  });
+
+  // POST /api/admin/tcdb/scrape-queue/:id/rescrape — reset to pending
+  router.post('/api/admin/tcdb/scrape-queue/:id/rescrape', (req, res) => {
+    const processor = req.app.locals.scrapeQueueProcessor;
+    processor.rescrapeItem(Number(req.params.id));
+    res.json({ reset: true });
   });
 
   return router;

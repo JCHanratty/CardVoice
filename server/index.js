@@ -54,6 +54,10 @@ function createServer(opts = {}) {
   const tcdbService = new TcdbService(tcdbOpts);
   app.locals.tcdbService = tcdbService;
 
+  // Scrape queue processor for batch TCDB scraping
+  const { ScrapeQueueProcessor } = require('./scrape-queue');
+  app.locals.scrapeQueueProcessor = new ScrapeQueueProcessor(db, tcdbService);
+
   // Anonymous heartbeat (delayed, non-blocking)
   const { sendHeartbeat } = require('./analytics');
   setTimeout(() => sendHeartbeat(db), 10000);
