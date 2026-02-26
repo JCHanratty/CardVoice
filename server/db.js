@@ -638,13 +638,35 @@ function _migrateHierarchyFixV2(db) {
       const suffix = row.name.slice(row.insert_name.length + 1).trim();
       if (!suffix) continue;
 
-      // Rename parallel to just the suffix and set insert_type_id
-      db.prepare('UPDATE set_parallels SET name = ?, insert_type_id = ? WHERE id = ?')
-        .run(suffix, row.found_insert_type_id, row.id);
+      // Check if short-name parallel already exists for this set
+      const existing = db.prepare('SELECT id FROM set_parallels WHERE set_id = ? AND name = ? AND id != ?')
+        .get(row.set_id, suffix, row.id);
 
-      // Update cards.parallel to match the new short name
-      db.prepare('UPDATE cards SET parallel = ? WHERE set_id = ? AND parallel = ?')
-        .run(suffix, row.set_id, row.name);
+      if (existing) {
+        // Short name already exists — scope it and merge the long-named one into it
+        db.prepare('UPDATE set_parallels SET insert_type_id = ? WHERE id = ?')
+          .run(row.found_insert_type_id, existing.id);
+        // Repoint cards from long name to short name
+        db.prepare('UPDATE cards SET parallel = ? WHERE set_id = ? AND parallel = ?')
+          .run(suffix, row.set_id, row.name);
+        // Move junction entries
+        db.prepare('UPDATE OR IGNORE insert_type_parallels SET parallel_id = ? WHERE parallel_id = ?')
+          .run(existing.id, row.id);
+        db.prepare('DELETE FROM insert_type_parallels WHERE parallel_id = ?').run(row.id);
+        // Move card_parallels entries
+        db.prepare('UPDATE OR IGNORE card_parallels SET parallel_id = ? WHERE parallel_id = ?')
+          .run(existing.id, row.id);
+        db.prepare('DELETE FROM card_parallels WHERE parallel_id = ?').run(row.id);
+        // Delete the long-named duplicate
+        db.prepare('DELETE FROM set_parallels WHERE id = ?').run(row.id);
+      } else {
+        // Rename parallel to just the suffix and set insert_type_id
+        db.prepare('UPDATE set_parallels SET name = ?, insert_type_id = ? WHERE id = ?')
+          .run(suffix, row.found_insert_type_id, row.id);
+        // Update cards.parallel to match the new short name
+        db.prepare('UPDATE cards SET parallel = ? WHERE set_id = ? AND parallel = ?')
+          .run(suffix, row.set_id, row.name);
+      }
 
       fix1++;
     }
