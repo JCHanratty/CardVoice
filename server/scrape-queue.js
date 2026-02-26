@@ -287,14 +287,14 @@ class ScrapeQueueProcessor {
   _serializeCatalog(catalogPath) {
     const catDb = new Database(catalogPath, { readonly: true });
     try {
-      const sets = catDb.prepare('SELECT * FROM card_sets').all();
-      const cards = catDb.prepare('SELECT * FROM cards').all();
-      const insertTypes = catDb.prepare('SELECT * FROM set_insert_types').all();
-      const parallels = catDb.prepare('SELECT * FROM set_parallels').all();
+      const sets = catDb.prepare('SELECT * FROM card_sets').all() || [];
+      const cards = catDb.prepare('SELECT * FROM cards').all() || [];
+      const insertTypes = catDb.prepare('SELECT * FROM set_insert_types').all() || [];
+      const parallels = catDb.prepare('SELECT * FROM set_parallels').all() || [];
 
       let junctions = [];
       try {
-        junctions = catDb.prepare('SELECT * FROM insert_type_parallels').all();
+        junctions = catDb.prepare('SELECT * FROM insert_type_parallels').all() || [];
       } catch (_) { /* table may not exist */ }
 
       return { sets, cards, insertTypes, parallels, junctions };
@@ -320,8 +320,51 @@ class ScrapeQueueProcessor {
 
     const catDb = new Database(item.catalog_path);
     try {
+      // Infer setId from catalog (typically a single set)
+      const catalogSet = catDb.prepare('SELECT id FROM card_sets LIMIT 1').get();
+      const defaultSetId = catalogSet ? catalogSet.id : null;
+
+      // Normalize frontend ops: { op, id, name } → { type, insertId/cardId/parallelId, setId, ... }
+      const normalized = operations.map(raw => {
+        // Already in backend format (has 'type' key)
+        if (raw.type) return raw;
+
+        const base = { type: raw.op, setId: raw.setId || defaultSetId };
+        switch (raw.op) {
+          case 'remove_card':
+            return { ...base, cardId: raw.id };
+          case 'rename_insert': {
+            const ins = catDb.prepare('SELECT name FROM set_insert_types WHERE (id = ? OR name = ?) AND set_id = ?')
+              .get(raw.id, raw.id, base.setId);
+            return { ...base, insertId: raw.id, oldName: ins ? ins.name : raw.id, newName: raw.name };
+          }
+          case 'remove_insert':
+            return { ...base, insertId: raw.id };
+          case 'reclassify_insert_to_parallel':
+          case 'insert_to_parallel': {
+            // Find a base insert to attach to (first non-matching insert, or fallback to 'Base')
+            const baseIns = catDb.prepare(
+              'SELECT id FROM set_insert_types WHERE set_id = ? AND id != ? ORDER BY id LIMIT 1'
+            ).get(base.setId, raw.id);
+            return { ...base, type: 'insert_to_parallel', insertId: raw.id, parentInsert: baseIns ? baseIns.id : raw.id };
+          }
+          case 'rename_parallel': {
+            const par = catDb.prepare('SELECT name FROM set_parallels WHERE (id = ? OR name = ?) AND set_id = ?')
+              .get(raw.id, raw.id, base.setId);
+            return { ...base, parallelId: raw.id, oldName: par ? par.name : raw.id, newName: raw.name };
+          }
+          case 'remove_parallel':
+            return { ...base, parallelId: raw.id };
+          case 'reclassify_parallel_to_insert':
+          case 'parallel_to_insert':
+            return { ...base, type: 'parallel_to_insert', parallelId: raw.id };
+          default:
+            return { ...base };
+        }
+      });
+
       const doEdits = catDb.transaction(() => {
-        for (const op of operations) {
+        for (const op of normalized) {
           switch (op.type) {
             case 'rename_set':
               catDb.prepare('UPDATE card_sets SET name = ? WHERE id = ?')

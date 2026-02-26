@@ -2208,7 +2208,12 @@ function createRoutes(db) {
     const processor = req.app.locals.scrapeQueueProcessor;
     const item = processor.getItem(Number(req.params.id));
     if (!item) return res.status(404).json({ error: 'Item not found' });
-    const data = item.scraped_data ? JSON.parse(item.scraped_data) : null;
+    const data = item.scraped_data ? JSON.parse(item.scraped_data) : {};
+    data.sets = data.sets || [];
+    data.cards = data.cards || [];
+    data.insertTypes = data.insertTypes || [];
+    data.parallels = data.parallels || [];
+    data.junctions = data.junctions || [];
     res.json(data);
   });
 
@@ -2218,7 +2223,12 @@ function createRoutes(db) {
       const processor = req.app.locals.scrapeQueueProcessor;
       processor.applyEdits(Number(req.params.id), req.body.operations || []);
       const item = processor.getItem(Number(req.params.id));
-      const data = item.scraped_data ? JSON.parse(item.scraped_data) : null;
+      const data = item.scraped_data ? JSON.parse(item.scraped_data) : {};
+      data.sets = data.sets || [];
+      data.cards = data.cards || [];
+      data.insertTypes = data.insertTypes || [];
+      data.parallels = data.parallels || [];
+      data.junctions = data.junctions || [];
       res.json(data);
     } catch (err) {
       res.status(500).json({ error: err.message });
